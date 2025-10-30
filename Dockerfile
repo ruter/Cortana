@@ -22,6 +22,4 @@ COPY tests ./tests
 RUN python -m pip install --upgrade pip \
  && python -m pip install .[dev,memu]
 
-COPY .env.example ./.env.example 2>/dev/null || true
-
 CMD ["python", "-m", "assistant_bot.bot"]
