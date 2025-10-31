@@ -4,13 +4,12 @@ version = "0.1.0"
 description = "Discord AI assistant bot integrating MemU memory with OpenRouter via PydanticAI"
 requires-python = ">=3.10"
 dependencies = [
-    "discord.py>=2.6.4",
-    "httpx==0.28.1",
-    "openai>=2.6.1",
-    "pydantic>=2.12.3",
+    "discord.py",
+    "openai",
+    "pydantic",
     "pydantic-ai-slim>=1.9.0",
-    "pydantic-settings>=2.11.0",
-    "python-dotenv>=1.2.1",
+    "pydantic-settings",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]
