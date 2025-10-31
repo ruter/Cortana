@@ -15,11 +15,11 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy project metadata first for dependency installation
-COPY pyproject.toml README.md ./
+COPY README.md requirements.txt ./
 COPY src ./src
 COPY tests ./tests
 
 RUN python -m pip install --upgrade pip \
- && python -m pip install .[dev,memu]
+ && python -m pip install -r requirements.txt --no-dependencies
 
 CMD ["python", "-m", "assistant_bot.bot"]
