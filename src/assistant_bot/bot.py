@@ -36,7 +36,7 @@ class AssistantBot(commands.Bot):
             model=settings.openrouter_model,
             temperature=settings.openrouter_temperature,
             max_output_tokens=settings.openrouter_max_output_tokens,
-            system_prompt="You are Cortana, a concise AI assistant for Discord.",
+            system_prompt=settings.agent_system_prompt,
         )
 
         self.conversation_manager = ConversationManager(

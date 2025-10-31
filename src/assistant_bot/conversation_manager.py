@@ -81,7 +81,7 @@ class ConversationManager:
 
             if session.default_memories:
                 prompt_sections.append(
-                    "Core context from MemU:\n" + "\n".join(f"- {m}" for m in session.default_memories)
+                    "Core context(the profile is about user):\n" + "\n".join(f"- {m}" for m in session.default_memories)
                 )
 
             if session.related_memories:
@@ -109,9 +109,9 @@ class ConversationManager:
             turns.append(user_fragment)
             prompt_sections.append("Conversation history:\n" + "\n".join(turns))
 
-            prompt_sections.append(
-                "Instructions: You are a helpful assistant responding succinctly and accurately to the user while leveraging provided memories."
-            )
+            # prompt_sections.append(
+            #     "Instructions: You are a helpful assistant responding succinctly and accurately to the user while leveraging provided memories."
+            # )
 
             prompt = "\n\n".join(section for section in prompt_sections if section)
             return prompt

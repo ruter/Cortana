@@ -75,7 +75,7 @@ class MemUClient:
     ) -> RetrievedMemories:
         search_query = query.strip() or "general conversation context"
         try:
-            default_categories, response = await asyncio.gather(
+            default_memories, related_memories = await asyncio.gather(
                 asyncio.to_thread(
                     self._client.retrieve_default_categories,
                     user_id=user_id,
@@ -93,8 +93,12 @@ class MemUClient:
             logger.error("MemU retrieval failed for user %s: %s", user_id, exc)
             raise MemUError(str(exc)) from exc
 
-        default_texts = [category.content for category in default_categories.categories]
-        related_texts = [item.memory.content for item in response.related_memories]
+        default_texts = related_texts = []
+        if default_memories and hasattr(default_memories, "categories"):
+            default_texts = [f'**{category.name}:** {category.summary}\n\n' for category in default_memories.categories if category.summary]
+        if related_memories and hasattr(related_memories, "related_memories"):
+            related_texts = [f'**{memory.memory.category}:** {memory.memory.content}\n\n' for memory in related_memories.related_memories if memory.memory]
+        logger.info(default_texts)
         logger.debug(
             "Retrieved %d categories and %d related memories for user %s",
             len(default_texts),

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     context_max_tokens: PositiveInt = Field(3000, alias="CONTEXT_MAX_TOKENS")
     session_ttl_seconds: PositiveInt = Field(900, alias="SESSION_TTL_SECONDS")
     memorization_batch_size: Literal[2, 3, 4] = Field(3, alias="MEMORIZATION_BATCH_SIZE")
+    agent_system_prompt: str = Field("You are Cortana, a concise AI assistant.", alias="AGENT_SYSTEM_PROMPT")
 
     openrouter_base_url: str = Field("https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
     openrouter_temperature: float = Field(0.2, alias="OPENROUTER_TEMPERATURE")
