@@ -5,10 +5,11 @@ description = "Discord AI assistant bot integrating MemU memory with OpenRouter 
 requires-python = ">=3.10"
 dependencies = [
     "discord.py>=2.6.4",
+    "httpx==0.28.1",
+    "openai>=2.6.1",
     "pydantic>=2.12.3",
     "pydantic-ai-slim>=1.9.0",
     "pydantic-settings>=2.11.0",
-    "openai>=2.6.1",
     "python-dotenv>=1.2.1",
 ]
 
@@ -18,7 +19,7 @@ dev = [
     "pytest-asyncio>=0.23",
 ]
 memu = [
-    "memu-py",
+    "memu-py>=0.1.8",
 ]
 
 [build-system]
