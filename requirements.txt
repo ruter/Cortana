@@ -23,7 +23,6 @@ charset-normalizer==3.4.4
 click==8.3.0
 cohere==5.20.0
 colorama==0.4.6
--e git+ssh://git@github.com/ruter/Cortana.git@9340a11703a4142697a1d76e49b970080e98e9e3#egg=cortana_discord_assistant
 cryptography==46.0.3
 cyclopts==4.1.0
 discord.py==2.6.4
