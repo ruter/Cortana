@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     openrouter_model: str = Field(..., alias="OPENROUTER_MODEL")
     openrouter_max_output_tokens: PositiveInt = Field(1024, alias="OPENROUTER_MAX_OUTPUT_TOKENS")
 
+    one_balance_auth_key: str = Field(..., alias="ONE_BALANCE_AUTH_KEY")
+
     memu_api_key: str = Field(..., alias="MEMU_API_KEY")
     memu_base_url: str = Field("https://api.memu.so", alias="MEMU_BASE_URL")
     memu_agent_id: str = Field("discord-assistant", alias="MEMU_AGENT_ID")

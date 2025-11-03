@@ -40,6 +40,7 @@ class AssistantBot(commands.Bot):
                 "google_thinking_config": {'thinking_budget': settings.llm_thinking_budget},
             },
             system_prompt=settings.agent_system_prompt,
+            one_balance_auth_key=settings.one_balance_auth_key,
         )
 
         self.conversation_manager = ConversationManager(

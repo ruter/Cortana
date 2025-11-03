@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from google.genai import Client
+from google.genai.types import HttpOptions
 from typing import Any, Protocol
 
 from pydantic_ai import Agent, UrlContextTool, WebSearchTool
@@ -42,10 +44,21 @@ class LlmAdapter:
         settings: dict[str, Any],
         system_prompt: str,
         max_retries: int = 3,
+        one_balance_auth_key: str | None = None,
     ) -> None:
         servers = load_mcp_servers('mcp_servers.json')
         logger.info("Loaded %d servers: %s", len(servers), servers)
-        provider = GoogleProvider(api_key=api_key)
+        if one_balance_auth_key:
+            client = Client(
+                api_key=api_key,
+                http_options=HttpOptions(
+                    base_url=base_url,
+                    headers={"x-goog-api-key": one_balance_auth_key}
+                )
+            )
+            provider = GoogleProvider(client=client)
+        else:
+            provider = GoogleProvider(api_key=api_key)
         self._agent = Agent(
             GoogleModel(model, provider=provider),
             system_prompt=system_prompt,
