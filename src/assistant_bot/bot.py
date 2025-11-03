@@ -31,11 +31,14 @@ class AssistantBot(commands.Bot):
         )
 
         self.llm_adapter = LlmAdapter(
-            api_key=settings.openrouter_api_key,
-            base_url=settings.openrouter_base_url,
-            model=settings.openrouter_model,
-            temperature=settings.openrouter_temperature,
-            max_output_tokens=settings.openrouter_max_output_tokens,
+            api_key=settings.google_api_key,
+            base_url=settings.google_base_url,
+            model=settings.google_model,
+            settings={
+                "temperature": settings.llm_temperature,
+                "max_tokens": settings.context_max_tokens,
+                "google_thinking_config": {'thinking_budget': settings.llm_thinking_budget},
+            },
             system_prompt=settings.agent_system_prompt,
         )
 

@@ -5,10 +5,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.settings import ModelSettings
+from pydantic_ai import Agent, UrlContextTool, WebSearchTool
+from pydantic_ai.mcp import load_mcp_servers
+from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
+from pydantic_ai.providers.google import GoogleProvider
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ConversationContext:
 
 
 class LlmAdapter:
-    """Wraps a PydanticAI agent configured for OpenRouter."""
+    """Wraps a PydanticAI agent configured for Google."""
 
     def __init__(
         self,
@@ -39,19 +39,25 @@ class LlmAdapter:
         api_key: str,
         base_url: str,
         model: str,
-        temperature: float,
-        max_output_tokens: int,
+        settings: dict[str, Any],
         system_prompt: str,
         max_retries: int = 3,
     ) -> None:
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url)
+        servers = load_mcp_servers('mcp_servers.json')
+        logger.info("Loaded %d servers: %s", len(servers), servers)
+        provider = GoogleProvider(api_key=api_key)
         self._agent = Agent(
-            OpenAIChatModel(model, provider=provider),
+            GoogleModel(model, provider=provider),
             system_prompt=system_prompt,
+            builtin_tools=[UrlContextTool(), WebSearchTool()],
+            # toolsets=servers,
         )
-        self._temperature = temperature
-        self._max_output_tokens = max_output_tokens
         self._max_retries = max_retries
+        self._settings = GoogleModelSettings(
+            temperature=settings.get("temperature"),
+            max_tokens=settings.get("max_tokens"),
+            google_thinking_config={"thinking_budget": settings.get("llm_thinking_budget")},
+        )
 
     async def generate_reply(self, prompt: str) -> str:
         backoff = 0.5
@@ -59,7 +65,7 @@ class LlmAdapter:
             try:
                 result = await self._agent.run(
                     prompt,
-                    model_settings=ModelSettings(temperature=self._temperature, max_output_tokens=self._max_output_tokens),
+                    model_settings=self._settings,
                 )
                 return str(result.output)
             except Exception as exc:  # pragma: no cover - logging path
