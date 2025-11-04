@@ -46,8 +46,8 @@ class LlmAdapter:
         max_retries: int = 3,
         one_balance_auth_key: str | None = None,
     ) -> None:
-        servers = load_mcp_servers('mcp_servers.json')
-        logger.info("Loaded %d servers: %s", len(servers), servers)
+        # servers = load_mcp_servers('mcp_servers.json')
+        # logger.info("Loaded %d servers: %s", len(servers), servers)
         if one_balance_auth_key:
             client = Client(
                 api_key=api_key,
