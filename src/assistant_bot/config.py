@@ -10,20 +10,20 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
-    discord_token: str = Field(..., alias="DISCORD_TOKEN")
+    discord_token: str = Field("YOUR_DISCORD_TOKEN", alias="DISCORD_TOKEN")
 
-    google_api_key: str = Field(..., alias="GOOGLE_API_KEY")
+    google_api_key: str = Field("YOUR_GOOGLE_API_KEY", alias="GOOGLE_API_KEY")
     google_base_url: str = Field("https://generativelanguage.googleapis.com/v1beta", alias="GOOGLE_BASE_URL")
-    google_model: str = Field(..., alias="GOOGLE_MODEL")
+    google_model: str = Field("gemini-2.5-flash", alias="GOOGLE_MODEL")
 
-    openrouter_api_key: str = Field(..., alias="OPENROUTER_API_KEY")
+    openrouter_api_key: str = Field("YOUR_OPENROUTER_API_KEY", alias="OPENROUTER_API_KEY")
     openrouter_base_url: str = Field("https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
-    openrouter_model: str = Field(..., alias="OPENROUTER_MODEL")
+    openrouter_model: str = Field("z-ai/glm-4.5-air:free", alias="OPENROUTER_MODEL")
     openrouter_max_output_tokens: PositiveInt = Field(1024, alias="OPENROUTER_MAX_OUTPUT_TOKENS")
 
-    one_balance_auth_key: str = Field(..., alias="ONE_BALANCE_AUTH_KEY")
+    one_balance_auth_key: str = Field("YOUR_ONE_BALANCE_AUTH_KEY", alias="ONE_BALANCE_AUTH_KEY")
 
-    memu_api_key: str = Field(..., alias="MEMU_API_KEY")
+    memu_api_key: str = Field("YOUR_MEMU_API_KEY", alias="MEMU_API_KEY")
     memu_base_url: str = Field("https://api.memu.so", alias="MEMU_BASE_URL")
     memu_agent_id: str = Field("discord-assistant", alias="MEMU_AGENT_ID")
     memu_agent_name: str = Field("Cortana", alias="MEMU_AGENT_NAME")
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     memorization_batch_size: Literal[2, 3, 4] = Field(3, alias="MEMORIZATION_BATCH_SIZE")
     agent_system_prompt: str = Field("You are Cortana, a concise AI assistant.", alias="AGENT_SYSTEM_PROMPT")
 
-    notion_token: str = Field(..., alias="NOTION_TOKEN")
+    notion_token: str = Field("YOUR_NOTION_TOKEN", alias="NOTION_TOKEN")
 
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
