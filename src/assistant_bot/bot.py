@@ -18,6 +18,7 @@ class AssistantBot(commands.Bot):
         intents = discord.Intents.default()
         intents.messages = True
         intents.message_content = True
+        intents.presences = True
 
         super().__init__(command_prefix=commands.when_mentioned_or("!"), intents=intents)
         self.settings = settings
@@ -60,10 +61,10 @@ class AssistantBot(commands.Bot):
             name="Halo Infinite"
         )
         await self.change_presence(status=discord.Status.online, activity=activity)
+        logging.info(f"Bot {self.user} is ready!")
 
     async def setup_hook(self) -> None:
         self._message_handler = MessageHandler(self, self.conversation_manager, self.llm_adapter)
-        self.add_listener(self.on_ready)
         self.add_listener(self._message_handler.on_message)
 
     async def close(self) -> None:
