@@ -15,9 +15,11 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy project metadata first for dependency installation
-COPY pyproject.toml README.md requirements.txt ./
+COPY pyproject.toml README.md requirements.txt .env.example mcp_servers.example.json ./
 COPY src ./src
 COPY tests ./tests
+
+# Rename the example config file
 RUN mv .env.example .env && mv mcp_servers.example.json mcp_servers.json
 
 RUN python -m pip install --upgrade pip \
