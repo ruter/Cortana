@@ -54,8 +54,16 @@ class AssistantBot(commands.Bot):
 
         self._message_handler: Optional[MessageHandler] = None
 
+    async def on_ready(self) -> None:
+        activity = discord.Activity(
+            type=discord.ActivityType.playing,
+            name="Halo Infinite"
+        )
+        await self.change_presence(status=discord.Status.online, activity=activity)
+
     async def setup_hook(self) -> None:
         self._message_handler = MessageHandler(self, self.conversation_manager, self.llm_adapter)
+        self.add_listener(self.on_ready)
         self.add_listener(self._message_handler.on_message)
 
     async def close(self) -> None:
