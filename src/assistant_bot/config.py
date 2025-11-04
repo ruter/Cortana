@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(0.2, alias="LLM_TEMPERATURE")
     llm_thinking_budget: PositiveInt = Field(1024, alias="LLM_THINKING_BUDGET")
     session_ttl_seconds: PositiveInt = Field(900, alias="SESSION_TTL_SECONDS")
-    memorization_batch_size: Literal[2, 3, 4] = Field(3, alias="MEMORIZATION_BATCH_SIZE")
+    memorization_batch_size: PositiveInt = Field(3, alias="MEMORIZATION_BATCH_SIZE")
     agent_system_prompt: str = Field("You are Cortana, a concise AI assistant.", alias="AGENT_SYSTEM_PROMPT")
 
     notion_token: str = Field("YOUR_NOTION_TOKEN", alias="NOTION_TOKEN")
