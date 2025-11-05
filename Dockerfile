@@ -24,7 +24,7 @@ COPY requirements.txt ./
 
 # Install Python dependencies
 RUN python -m pip install --upgrade pip \
- && python -m pip install -r requirements.txt
+ && python -m pip install -r requirements.txt --no-dependencies
 
 # Copy project files
 COPY pyproject.toml README.md ./
