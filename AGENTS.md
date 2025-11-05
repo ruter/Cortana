@@ -6,10 +6,12 @@
 - **Run all tests**: `pytest`
 - **Run single test**: `pytest tests/test_file.py::test_function_name`
 - **Build Docker**: `docker build -t cortana .`
+- **Run with Docker Compose**: `docker-compose up -d`
+- **Stop Docker**: `docker-compose down`
 
 ## Architecture & Structure
 - **Core modules**: `bot.py` (entrypoint), `config.py` (pydantic settings), `conversation_manager.py` (session/context), `llm_adapter.py` (PydanticAI), `memu_client.py` (memory SDK), `handlers/message_handler.py` (discord events)
-- **Key integrations**: Discord.py for bot framework, MemU for agentic memory, PydanticAI/OpenRouter for LLM responses
+- **Key integrations**: Discord.py for bot framework, MemU for agentic memory, PydanticAI/Google Gemini for LLM responses
 - **Data flow**: Message → retrieve memories → build prompt → generate response → batch memorize
 - **No databases**: Uses MemU cloud API for persistence, in-memory sessions with TTL
 

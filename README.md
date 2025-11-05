@@ -13,12 +13,12 @@ Production-oriented Discord bot that blends MemU's agentic memory system with Go
 - **Thinking Placeholder Replies** – Immediately acknowledges new conversations with "I am thinking, wait a moment..." and edits the message to the final LLM response.
 
 ## Prerequisites
-- Python 3.10+
+- Python 3.10+ (for local development) or Docker (for containerized deployment)
 - Discord application with bot token and **Message Content Intent** enabled
 - Google Gemini API key (via Google AI Studio)
 - MemU API key (cloud or self-hosted) and optional custom base URL
 - (Optional) One Balance auth key for enhanced Gemini API access
-- (Recommended) Virtual environment such as `venv` or `uv`
+- (Recommended) Virtual environment such as `venv` or `uv` (for local development)
 
 ## Installation
 ```bash
@@ -65,9 +65,30 @@ LOG_LEVEL=INFO
 Unset values fall back to sensible defaults defined in `assistant_bot.config.Settings`.
 
 ## Running the Bot
+
+### Local Development
 ```bash
 python -m assistant_bot.bot
 ```
+
+### Docker
+Create a `.env` file with your configuration (copy from `.env.example`), then run:
+```bash
+docker-compose up -d
+```
+
+Or build and run manually:
+```bash
+docker build -t cortana .
+docker run -d --env-file .env cortana
+```
+
+The Docker setup includes:
+- Multi-stage build for optimized image size
+- Non-root user for security
+- Health checks for container monitoring
+- Proper dependency management
+- Volume mounting for MCP server configuration
 
 ### Lifecycle
 1. **Startup** – Loads configuration, initializes MemU SDK client, PydanticAI agent, and conversation manager.
@@ -111,4 +132,4 @@ tests/
 - Extend memory metadata in `conversation_manager.py` if you need richer MemU storage schemas.
 - The bot responds to @mentions in servers and all messages in DMs.
 - MCP servers can be configured in `mcp_servers.json` for additional tool integrations.
-- Docker deployment is supported with automated builds via GitHub Actions.
+- Docker deployment is supported with automated builds via GitHub Actions and docker-compose for easy local development.
