@@ -30,7 +30,6 @@ RUN python -m pip install --upgrade pip \
 COPY pyproject.toml README.md ./
 COPY mcp_servers.example.json mcp_servers.json
 COPY src/ ./src/
-COPY tests/ ./tests/
 
 # Install the package itself
 RUN python -m pip install -e .
