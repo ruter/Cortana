@@ -39,7 +39,10 @@ class MessageHandler:
         if self._bot.user:
             agent_name = getattr(self._bot.user, "display_name", None) or self._bot.user.name
 
+        thinking_message: Optional[discord.Message] = None
+        error_reply = "I ran into an error while thinking. Please try again."
         try:
+            thinking_message = await message.channel.send("I am thinking, wait a moument...")
             prompt = await self._conversation_manager.prepare_prompt(
                 guild_id=guild_id,
                 channel_id=channel_id,
@@ -51,10 +54,23 @@ class MessageHandler:
             reply = await self._llm_adapter.generate_reply(prompt)
         except LlmError as exc:
             logger.error("LLM error: %s", exc)
-            await message.channel.send("I ran into an error while thinking. Please try again.")
+            if thinking_message:
+                await thinking_message.edit(content=error_reply)
+            else:
+                await message.channel.send(error_reply)
+            return
+        except Exception:
+            logger.exception("Unexpected error while handling message")
+            if thinking_message:
+                await thinking_message.edit(content=error_reply)
+            else:
+                await message.channel.send(error_reply)
             return
 
-        await message.channel.send(reply)
+        if thinking_message:
+            await thinking_message.edit(content=reply)
+        else:
+            await message.channel.send(reply)
         await self._conversation_manager.record_exchange(
             guild_id=guild_id,
             channel_id=channel_id,
