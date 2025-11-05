@@ -42,7 +42,7 @@ class MessageHandler:
         thinking_message: Optional[discord.Message] = None
         error_reply = "I ran into an error while thinking. Please try again."
         try:
-            thinking_message = await message.channel.send("I am thinking, wait a moument...")
+            thinking_message = await message.channel.send("I am thinking, wait a moment...")
             prompt = await self._conversation_manager.prepare_prompt(
                 guild_id=guild_id,
                 channel_id=channel_id,

@@ -1,7 +1,7 @@
 [project]
 name = "cortana-discord-assistant"
 version = "0.1.0"
-description = "Discord AI assistant bot integrating MemU memory with OpenRouter via PydanticAI"
+description = "Discord AI assistant bot integrating MemU memory with Google Gemini via PydanticAI"
 requires-python = ">=3.10"
 
 [build-system]
