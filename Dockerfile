@@ -22,17 +22,15 @@ WORKDIR /app
 # Copy dependency files first for better caching
 COPY requirements.txt ./
 
-# Install Python dependencies
-RUN python -m pip install --upgrade pip \
- && python -m pip install -r requirements.txt --no-dependencies
-
 # Copy project files
 COPY pyproject.toml README.md ./
 COPY mcp_servers.example.json mcp_servers.json
 COPY src/ ./src/
 
-# Install the package itself
-RUN python -m pip install -e .
+# Install Python dependencies
+RUN python -m pip install --upgrade pip \
+ && python -m pip install -r requirements.txt --no-dependencies \
+    && python -m pip install .
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app \
