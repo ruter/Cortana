@@ -1,6 +1,14 @@
+import os
+
 from datetime import datetime
+from google.genai import Client
+from google.genai.types import HttpOptions
 from typing import Dict, Any
+
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
+
 from .config import config
 from .tools import (
     add_todo, list_todos, complete_todo,
@@ -8,19 +16,31 @@ from .tools import (
     search_long_term_memory, get_unread_emails,
     add_reminder, list_reminders, cancel_reminder
 )
-from .memory import memory_client
-import os
 
-# Configure OpenAI environment variables for custom endpoints
-os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
-os.environ['OPENAI_BASE_URL'] = config.LLM_BASE_URL
-
-# Define the Agent with string-based model specification
-cortana_agent = Agent(
-    f'openai:{config.LLM_MODEL_NAME}',
-    deps_type=Dict[str, Any],
-    system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
-)
+if not config.ONE_BALANCE_AUTH_KEY:
+    # Configure OpenAI environment variables for custom endpoints
+    os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
+    os.environ['OPENAI_BASE_URL'] = config.LLM_BASE_URL
+    # Define the Agent with string-based model specification
+    cortana_agent = Agent(
+        f'openai:{config.LLM_MODEL_NAME}',
+        deps_type=Dict[str, Any],
+        system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
+    )
+else:
+    client = Client(
+        api_key=config.LLM_API_KEY,
+        http_options=HttpOptions(
+            base_url=config.LLM_BASE_URL,
+            headers={"x-goog-api-key": config.ONE_BALANCE_AUTH_KEY}
+        )
+    )
+    provider = GoogleProvider(client=client)
+    cortana_agent = Agent(
+        GoogleModel(config.LLM_MODEL_NAME, provider=provider),
+        deps_type=Dict[str, Any],
+        system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
+    )
 
 # Register Tools
 cortana_agent.tool(add_todo)
@@ -37,7 +57,7 @@ cortana_agent.tool(cancel_reminder)
 @cortana_agent.system_prompt
 async def dynamic_system_prompt(ctx: RunContext[Dict[str, Any]]) -> str:
     user_info = ctx.deps.get("user_info", {})
-    
+
     try:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(config.DEFAULT_TIMEZONE)
@@ -50,11 +70,11 @@ async def dynamic_system_prompt(ctx: RunContext[Dict[str, Any]]) -> str:
             # Final fallback to UTC
             from datetime import timezone
             tz = timezone.utc
-        
+
     now = datetime.now(tz)
     current_time = now.isoformat()
     day_of_week = now.strftime('%A')
-    
+
     # Retrieve Zep Memory Context
     zep_memory_context = ctx.deps.get("zep_memory_context", "No previous context.")
 
