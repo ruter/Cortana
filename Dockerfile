@@ -1,44 +1,21 @@
-# syntax=docker/dockerfile:1.7
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim
 
-ARG PYTHON_VERSION=3.10
-FROM python:${PYTHON_VERSION}-slim AS base
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Install system dependencies
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        build-essential \
-        curl \
-        git \
- && rm -rf /var/lib/apt/lists/*
-
+# Set the working directory in the container
 WORKDIR /app
 
-# Copy dependency files first for better caching
-COPY requirements.txt ./
+# Copy the requirements file into the container at /app
+COPY requirements.txt .
 
-# Copy project files
-COPY pyproject.toml README.md ./
-COPY mcp_servers.example.json mcp_servers.json
+# Install any needed packages specified in requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application code
 COPY src/ ./src/
 
-# Install Python dependencies
-RUN python -m pip install --upgrade pip \
- && python -m pip install -r requirements.txt --no-dependencies \
-    && python -m pip install .
+# Set environment variables
+# PYTHONUNBUFFERED=1 ensures that Python output is sent straight to terminal (e.g. your container logs)
+ENV PYTHONUNBUFFERED=1
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash app \
- && chown -R app:app /app
-USER app
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import assistant_bot; print('OK')" || exit 1
-
-CMD ["python", "-m", "assistant_bot.bot"]
+# Run the bot
+CMD ["python", "-m", "src.main"]
