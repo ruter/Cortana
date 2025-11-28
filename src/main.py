@@ -3,11 +3,22 @@ import asyncio
 from .config import config
 from .agent import cortana_agent
 from .memory import memory_client
+from .scheduler import ReminderScheduler
 
 class CortanaClient(discord.Client):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scheduler = None
+    
     async def on_ready(self):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
         print('Cortana is online and ready to serve.')
+        
+        # Start the reminder scheduler
+        if self.scheduler is None:
+            self.scheduler = ReminderScheduler(self)
+            self.scheduler.start()
+            print('Reminder scheduler initialized')
 
     async def on_message(self, message):
         # Don't reply to self

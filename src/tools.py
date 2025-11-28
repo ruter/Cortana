@@ -21,6 +21,15 @@ class CalendarEvent(BaseModel):
     end_time: datetime
     location: Optional[str] = None
 
+class Reminder(BaseModel):
+    id: int
+    user_id: int
+    message: str
+    remind_time: datetime
+    is_sent: bool
+    related_event_id: Optional[int] = None
+    created_at: datetime
+
 # --- Helper Functions ---
 
 async def ensure_user_exists(user_id: int) -> None:
@@ -191,3 +200,120 @@ async def get_unread_emails(ctx: RunContext[Dict[str, Any]], limit: int = 5) -> 
     In a real app, this would connect to Gmail/Outlook API.
     """
     return "No unread emails (Email integration not yet implemented)."
+
+# --- Reminder Tools ---
+
+async def add_reminder(ctx: RunContext[Dict[str, Any]], message: str, remind_time: datetime, related_event_id: Optional[int] = None) -> str:
+    """
+    Creates a new reminder for the user.
+    
+    Args:
+        message: The reminder message to send.
+        remind_time: When to send the reminder.
+        related_event_id: Optional ID of a related calendar event.
+    """
+    user_id = ctx.deps['user_info']['id']
+    
+    # Ensure user exists in database
+    await ensure_user_exists(user_id)
+    
+    # Validate that remind_time is in the future
+    try:
+        from zoneinfo import ZoneInfo
+        from .config import config
+        tz = ZoneInfo(config.DEFAULT_TIMEZONE)
+    except Exception:
+        try:
+            import pytz
+            from .config import config
+            tz = pytz.timezone(config.DEFAULT_TIMEZONE)
+        except Exception:
+            from datetime import timezone
+            tz = timezone.utc
+    
+    now = datetime.now(tz)
+    
+    # Make remind_time timezone-aware if it's not
+    if remind_time.tzinfo is None:
+        remind_time = remind_time.replace(tzinfo=tz)
+    
+    if remind_time <= now:
+        return "Error: Reminder time must be in the future. Cannot create reminders for past times."
+    
+    data = {
+        "user_id": user_id,
+        "message": message,
+        "remind_time": remind_time.isoformat(),
+        "related_event_id": related_event_id
+    }
+    
+    try:
+        response = db.table("reminders").insert(data).execute()
+        if response.data:
+            reminder_id = response.data[0]['id']
+            return f"Reminder set: '{message}' at {remind_time.strftime('%Y-%m-%d %H:%M %Z')} (ID: {reminder_id})"
+        return "Reminder created successfully."
+    except Exception as e:
+        return f"Error creating reminder: {str(e)}"
+
+async def list_reminders(ctx: RunContext[Dict[str, Any]], include_sent: bool = False, limit: int = 10) -> str:
+    """
+    Lists the user's reminders.
+    
+    Args:
+        include_sent: Whether to include already sent reminders (default: False).
+        limit: Maximum number of reminders to return.
+    """
+    user_id = ctx.deps['user_info']['id']
+    
+    try:
+        query = db.table("reminders").select("*").eq("user_id", user_id)
+        
+        if not include_sent:
+            query = query.eq("is_sent", False)
+        
+        response = query.order("remind_time", desc=False).limit(limit).execute()
+        
+        if not response.data:
+            status = "reminders" if include_sent else "pending reminders"
+            return f"No {status} found."
+        
+        reminders = [Reminder(**item) for item in response.data]
+        
+        result = "**Your Reminders:**\n"
+        for reminder in reminders:
+            status_icon = "✅" if reminder.is_sent else "⏰"
+            event_info = f" (Event #{reminder.related_event_id})" if reminder.related_event_id else ""
+            result += f"{status_icon} [{reminder.id}] {reminder.message} - {reminder.remind_time.strftime('%Y-%m-%d %H:%M')}{event_info}\n"
+        
+        return result
+    except Exception as e:
+        return f"Error listing reminders: {str(e)}"
+
+async def cancel_reminder(ctx: RunContext[Dict[str, Any]], reminder_id: int) -> str:
+    """
+    Cancels a pending reminder.
+    
+    Args:
+        reminder_id: The ID of the reminder to cancel.
+    """
+    user_id = ctx.deps['user_info']['id']
+    
+    try:
+        # Verify ownership and that reminder exists
+        response = db.table("reminders").select("*").eq("id", reminder_id).eq("user_id", user_id).execute()
+        
+        if not response.data:
+            return "Reminder not found or access denied."
+        
+        reminder = Reminder(**response.data[0])
+        
+        if reminder.is_sent:
+            return f"Reminder {reminder_id} has already been sent and cannot be cancelled."
+        
+        # Delete the reminder
+        db.table("reminders").delete().eq("id", reminder_id).execute()
+        return f"Reminder {reminder_id} has been cancelled: '{reminder.message}'"
+    except Exception as e:
+        return f"Error cancelling reminder: {str(e)}"
+
