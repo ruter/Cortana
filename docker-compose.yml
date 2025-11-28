@@ -1,55 +1,12 @@
 version: '3.8'
 
 services:
-  cortana-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: cortana-discord-bot
+  cortana:
+    build: .
+    container_name: cortana-bot
     restart: unless-stopped
-    environment:
-      # Discord
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
-
-      # Google Gemini
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - GOOGLE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
-      - GOOGLE_MODEL=gemini-2.5-flash
-
-      # Optional: One Balance for enhanced API access
-      - ONE_BALANCE_AUTH_KEY=${ONE_BALANCE_AUTH_KEY}
-
-      # MemU
-      - MEMU_API_KEY=${MEMU_API_KEY}
-      - MEMU_BASE_URL=https://api.memu.so
-      - MEMU_AGENT_ID=discord-assistant
-      - MEMU_AGENT_NAME=Cortana
-      - MEMU_RETRIEVE_TOP_K=20
-      - MEMU_USER_NAME_FALLBACK=User
-
-      # Session / Context
-      - CONTEXT_MAX_TOKENS=40960
-      - LLM_TEMPERATURE=0.5
-      - LLM_THINKING_BUDGET=1024
-      - SESSION_TTL_SECONDS=900
-      - MEMORIZATION_BATCH_SIZE=3
-
-      # Logging
-      - LOG_LEVEL=INFO
-
-      # System prompt (can be overridden)
-      - AGENT_SYSTEM_PROMPT=${AGENT_SYSTEM_PROMPT:-"You are Cortana, a concise AI assistant."}
-    volumes:
-      # Mount MCP servers config if you have custom servers
-      - ./mcp_servers.json:/app/mcp_servers.json:ro
-    healthcheck:
-      test: ["CMD", "python", "-c", "import assistant_bot; print('OK')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    env_file:
+      - .env
+    # Mount the source code for easier development (optional, remove for production)
+    # volumes:
+    #   - ./src:/app/src
