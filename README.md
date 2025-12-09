@@ -1,3 +1,5 @@
+![](https://img.shields.io/badge/Gemini%20Assisted-100%25-00a67d?logo=googlegemini)
+
 # Cortana - Discord Personal Assistant
 
 Cortana is an intelligent Discord bot designed to be a personalized digital companion. She features **bionic memory** (Short-Term & Long-Term), **task management** (Todos, Calendar), and a unique personality.
