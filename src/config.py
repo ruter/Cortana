@@ -14,6 +14,7 @@ class Config:
     LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY"))
     LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gpt-4o")
     ONE_BALANCE_AUTH_KEY = os.getenv("ONE_BALANCE_AUTH_KEY", "")
+    EXA_API_KEY = os.getenv("EXA_API_KEY", "")
 
     DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "UTC")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -23,7 +24,6 @@ class Config:
         missing = []
         if not cls.DISCORD_TOKEN: missing.append("DISCORD_TOKEN")
         if not cls.SUPABASE_URL: missing.append("SUPABASE_URL")
-        if not cls.SUPABASE_KEY: missing.append("SUPABASE_KEY")
         if not cls.SUPABASE_KEY: missing.append("SUPABASE_KEY")
         if not cls.ZEP_API_KEY: missing.append("ZEP_API_KEY")
         if not cls.LLM_API_KEY: missing.append("LLM_API_KEY")

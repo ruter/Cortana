@@ -7,3 +7,4 @@ openai
 tzdata
 beautifulsoup4
 aiohttp
+exa-py

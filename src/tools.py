@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 import aiohttp
 from bs4 import BeautifulSoup
+from exa_py import Exa
+from .config import config
 from .database import db
 from .memory import memory_client
 
@@ -241,6 +243,53 @@ async def fetch_url(ctx: RunContext[Dict[str, Any]], url: str) -> str:
         return f"Title: {title}\\nDescription: {meta_desc}\\n\\nContent Preview:\\n{content_preview}"
     except Exception as e:
         return f"Error fetching URL: {str(e)}"
+
+async def search_web_exa(ctx: RunContext[Dict[str, Any]], query: str) -> str:
+    """
+    Searches the web using Exa.
+    
+    Args:
+        query: The search query.
+    """
+    try:
+        exa = Exa(api_key=config.EXA_API_KEY)
+        response = exa.search_and_contents(
+            query,
+            type="neural",
+            use_autoprompt=True,
+            num_results=3,
+            text=True
+        )
+        
+        result = f"Search results for '{query}':\\n\\n"
+        for r in response.results:
+            result += f"Title: {r.title}\\nURL: {r.url}\\nContent: {r.text[:300]}...\\n\\n"
+            
+        return result
+    except Exception as e:
+        return f"Error searching with Exa: {str(e)}"
+
+async def get_contents_exa(ctx: RunContext[Dict[str, Any]], urls: List[str]) -> str:
+    """
+    Retrieves content from specific URLs using Exa.
+    
+    Args:
+        urls: List of URLs to retrieve.
+    """
+    try:
+        exa = Exa(api_key=config.EXA_API_KEY)
+        response = exa.get_contents(
+            urls,
+            text=True
+        )
+        
+        result = ""
+        for r in response.results:
+            result += f"Title: {r.title}\\nURL: {r.url}\\nContent:\\n{r.text[:1000]}...\\n\\n"
+            
+        return result
+    except Exception as e:
+        return f"Error getting contents with Exa: {str(e)}"
 
 # --- Reminder Tools ---
 
