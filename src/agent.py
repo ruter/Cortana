@@ -14,7 +14,8 @@ from .tools import (
     add_todo, list_todos, complete_todo,
     add_calendar_event, check_calendar_availability,
     search_long_term_memory, get_unread_emails,
-    add_reminder, list_reminders, cancel_reminder
+    add_reminder, list_reminders, cancel_reminder,
+    fetch_url
 )
 
 if not config.ONE_BALANCE_AUTH_KEY:
@@ -53,6 +54,7 @@ cortana_agent.tool(get_unread_emails)
 cortana_agent.tool(add_reminder)
 cortana_agent.tool(list_reminders)
 cortana_agent.tool(cancel_reminder)
+cortana_agent.tool(fetch_url)
 
 @cortana_agent.system_prompt
 async def dynamic_system_prompt(ctx: RunContext[Dict[str, Any]]) -> str:

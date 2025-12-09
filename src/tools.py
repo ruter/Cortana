@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
+import aiohttp
+from bs4 import BeautifulSoup
 from .database import db
 from .memory import memory_client
 
@@ -200,6 +202,45 @@ async def get_unread_emails(ctx: RunContext[Dict[str, Any]], limit: int = 5) -> 
     In a real app, this would connect to Gmail/Outlook API.
     """
     return "No unread emails (Email integration not yet implemented)."
+
+async def fetch_url(ctx: RunContext[Dict[str, Any]], url: str) -> str:
+    """
+    Fetches content from a URL.
+    
+    Args:
+        url: The URL to fetch.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    return f"Error fetching URL: {response.status} {response.reason}"
+                html = await response.text()
+                
+        soup = BeautifulSoup(html, 'html.parser')
+        title = soup.title.string if soup.title else "No title"
+        
+        # Get meta description
+        meta_desc = ""
+        meta = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
+        if meta:
+            meta_desc = meta.get('content', '')
+            
+        # Get accessible text content
+        for script in soup(["script", "style"]):
+            script.decompose()
+            
+        text = soup.get_text()
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\\n'.join(chunk for chunk in chunks if chunk)
+        
+        # Limit text length
+        content_preview = text[:500] + "..." if len(text) > 500 else text
+        
+        return f"Title: {title}\\nDescription: {meta_desc}\\n\\nContent Preview:\\n{content_preview}"
+    except Exception as e:
+        return f"Error fetching URL: {str(e)}"
 
 # --- Reminder Tools ---
 

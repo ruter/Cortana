@@ -5,3 +5,5 @@ zep-cloud
 python-dotenv
 openai
 tzdata
+beautifulsoup4
+aiohttp
