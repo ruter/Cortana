@@ -18,48 +18,6 @@ from .tools import (
     fetch_url, search_web_exa, get_contents_exa
 )
 
-if not config.ONE_BALANCE_AUTH_KEY:
-    # Configure OpenAI environment variables for custom endpoints
-    os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
-    os.environ['OPENAI_BASE_URL'] = config.LLM_BASE_URL
-    # Define the Agent with string-based model specification
-    cortana_agent = Agent(
-        f'openai:{config.LLM_MODEL_NAME}',
-        deps_type=Dict[str, Any],
-        system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
-    )
-else:
-    client = Client(
-        api_key=config.LLM_API_KEY,
-        http_options=HttpOptions(
-            base_url=config.LLM_BASE_URL,
-            headers={"x-goog-api-key": config.ONE_BALANCE_AUTH_KEY}
-        )
-    )
-    provider = GoogleProvider(client=client)
-    cortana_agent = Agent(
-        GoogleModel(config.LLM_MODEL_NAME, provider=provider),
-        deps_type=Dict[str, Any],
-        system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
-    )
-
-# Register Tools
-cortana_agent.tool(add_todo)
-cortana_agent.tool(list_todos)
-cortana_agent.tool(complete_todo)
-cortana_agent.tool(add_calendar_event)
-cortana_agent.tool(check_calendar_availability)
-cortana_agent.tool(search_long_term_memory)
-cortana_agent.tool(get_unread_emails)
-cortana_agent.tool(add_reminder)
-cortana_agent.tool(list_reminders)
-cortana_agent.tool(cancel_reminder)
-cortana_agent.tool(fetch_url)
-if config.EXA_API_KEY:
-    cortana_agent.tool(search_web_exa)
-    cortana_agent.tool(get_contents_exa)
-
-@cortana_agent.system_prompt
 async def dynamic_system_prompt(ctx: RunContext[Dict[str, Any]]) -> str:
     user_info = ctx.deps.get("user_info", {})
 
@@ -140,3 +98,57 @@ You have access to Long-Term Memory (Facts) and Short-Term Context (Recent Conve
 3. If an error occurs during tool execution, inform the user plainly (e.g., "I hit a snag accessing the database. Let's try that again in a moment.").
 """
     return prompt
+
+def initialize_agent():
+    if not config.ONE_BALANCE_AUTH_KEY:
+        # Configure OpenAI environment variables for custom endpoints
+        os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
+        os.environ['OPENAI_BASE_URL'] = config.LLM_BASE_URL
+        # Define the Agent with string-based model specification
+        agent = Agent(
+            f'openai:{config.LLM_MODEL_NAME}',
+            deps_type=Dict[str, Any],
+            system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
+        )
+    else:
+        client = Client(
+            api_key=config.LLM_API_KEY,
+            http_options=HttpOptions(
+                base_url=config.LLM_BASE_URL,
+                headers={"x-goog-api-key": config.ONE_BALANCE_AUTH_KEY}
+            )
+        )
+        provider = GoogleProvider(client=client)
+        agent = Agent(
+            GoogleModel(config.LLM_MODEL_NAME, provider=provider),
+            deps_type=Dict[str, Any],
+            system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
+        )
+
+    # Register Tools
+    agent.tool(add_todo)
+    agent.tool(list_todos)
+    agent.tool(complete_todo)
+    agent.tool(add_calendar_event)
+    agent.tool(check_calendar_availability)
+    agent.tool(search_long_term_memory)
+    agent.tool(get_unread_emails)
+    agent.tool(add_reminder)
+    agent.tool(list_reminders)
+    agent.tool(cancel_reminder)
+    agent.tool(fetch_url)
+    if config.EXA_API_KEY:
+        agent.tool(search_web_exa)
+        agent.tool(get_contents_exa)
+
+    # Register System Prompt
+    agent.system_prompt(dynamic_system_prompt)
+
+    return agent
+
+cortana_agent = initialize_agent()
+
+def update_agent_model(model_name: str):
+    config.LLM_MODEL_NAME = model_name
+    global cortana_agent
+    cortana_agent = initialize_agent()

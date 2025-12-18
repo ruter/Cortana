@@ -1,15 +1,36 @@
 import discord
+from discord import app_commands
 import asyncio
 from .config import config
-from .agent import cortana_agent
+from . import agent
 from .memory import memory_client
 from .scheduler import ReminderScheduler
+
+class SettingsGroup(app_commands.Group):
+    def __init__(self):
+        super().__init__(name="settings", description="Cortana settings")
+
+    @app_commands.command(name="model", description="Change the LLM model (e.g. gpt-4o, gemini-1.5-pro)")
+    @app_commands.describe(model_name="The name of the model to use")
+    async def model(self, interaction: discord.Interaction, model_name: str):
+        try:
+            agent.update_agent_model(model_name)
+            await interaction.response.send_message(f"✅ Model updated to **{model_name}** for this session.")
+            print(f"Model updated to {model_name} by {interaction.user}")
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed to update model: {e}", ephemeral=True)
 
 class CortanaClient(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.scheduler = None
+        self.tree = app_commands.CommandTree(self)
     
+    async def setup_hook(self):
+        self.tree.add_command(SettingsGroup())
+        await self.tree.sync()
+        print("Slash commands synced")
+
     async def on_ready(self):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
         print('Cortana is online and ready to serve.')
@@ -85,7 +106,7 @@ class CortanaClient(discord.Client):
 
         try:
             async with message.channel.typing():
-                result = await cortana_agent.run(message.content, deps=deps)
+                result = await agent.cortana_agent.run(message.content, deps=deps)
                 response_text = result.output if hasattr(result, 'output') else str(result)
                 
                 # 3. Send Response
