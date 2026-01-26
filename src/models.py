@@ -81,18 +81,6 @@ MODELS: Dict[Provider, Dict[str, Model]] = {
             cost=ModelCost(input=0.15, output=0.6, cacheRead=0.075, cacheWrite=0.15),
             contextWindow=128000,
             maxTokens=16384
-        ),
-        "o1-preview": Model(
-            id="o1-preview",
-            name="o1 Preview",
-            api="openai-responses",
-            provider="openai",
-            baseUrl="https://api.openai.com/v1",
-            reasoning=True,
-            input_types=["text"],
-            cost=ModelCost(input=15.0, output=60.0),
-            contextWindow=128000,
-            maxTokens=32768
         )
     },
     "anthropic": {
@@ -105,18 +93,6 @@ MODELS: Dict[Provider, Dict[str, Model]] = {
             reasoning=False,
             input_types=["text", "image"],
             cost=ModelCost(input=3.0, output=15.0, cacheRead=0.3, cacheWrite=3.75),
-            contextWindow=200000,
-            maxTokens=8192
-        ),
-        "claude-3-5-haiku-20241022": Model(
-            id="claude-3-5-haiku-20241022",
-            name="Claude 3.5 Haiku",
-            api="anthropic-messages",
-            provider="anthropic",
-            baseUrl="https://api.anthropic.com/v1",
-            reasoning=False,
-            input_types=["text"],
-            cost=ModelCost(input=0.8, output=4.0, cacheRead=0.08, cacheWrite=1.0),
             contextWindow=200000,
             maxTokens=8192
         )
@@ -133,18 +109,34 @@ MODELS: Dict[Provider, Dict[str, Model]] = {
             cost=ModelCost(input=3.5, output=10.5),
             contextWindow=2000000,
             maxTokens=8192
-        ),
-        "gemini-1.5-flash": Model(
-            id="gemini-1.5-flash",
-            name="Gemini 1.5 Flash",
-            api="google-generative-ai",
-            provider="google",
-            baseUrl="https://generativelanguage.googleapis.com/v1beta",
+        )
+    },
+    "google-gemini-cli": {
+        "gemini-2.0-flash": Model(
+            id="gemini-2.0-flash",
+            name="Gemini 2.0 Flash (CLI)",
+            api="google-gemini-cli",
+            provider="google-gemini-cli",
+            baseUrl="https://cloudcode-pa.googleapis.com",
             reasoning=False,
             input_types=["text", "image"],
-            cost=ModelCost(input=0.075, output=0.3),
+            cost=ModelCost(input=0.0, output=0.0),
             contextWindow=1000000,
             maxTokens=8192
+        )
+    },
+    "google-antigravity": {
+        "gemini-3-alpha": Model(
+            id="gemini-3-alpha",
+            name="Gemini 3 Alpha (Antigravity)",
+            api="google-gemini-cli",
+            provider="google-antigravity",
+            baseUrl="https://cloudcode-pa.googleapis.com",
+            reasoning=True,
+            input_types=["text", "image"],
+            cost=ModelCost(input=0.0, output=0.0),
+            contextWindow=2000000,
+            maxTokens=16384
         )
     }
 }

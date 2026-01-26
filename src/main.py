@@ -33,6 +33,7 @@ class CortanaClient(discord.Client):
         super().__init__(*args, **kwargs)
         self.scheduler = None
         self.tree = app_commands.CommandTree(self)
+        self._pending_logins = {} # user_id -> provider_id
     
     async def setup_hook(self):
         self.tree.add_command(SettingsGroup())
@@ -47,7 +48,7 @@ class CortanaClient(discord.Client):
             await interaction.response.send_message(embed=embed)
 
         # Add /login command
-        @self.tree.command(name="login", description="Login to an AI provider (e.g. Anthropic)")
+        @self.tree.command(name="login", description="Login to an AI provider (e.g. anthropic, google-gemini-cli)")
         @app_commands.describe(provider_id="The ID of the provider to login to")
         async def login(interaction: discord.Interaction, provider_id: str):
             prov = get_provider(provider_id)
@@ -63,8 +64,9 @@ class CortanaClient(discord.Client):
                 embed.add_field(name="Authorization URL", value=f"[Click here to login]({auth_info.url})")
                 
                 await interaction.user.send(embed=embed)
-                await interaction.user.send("After you have the authorization code, reply to this message with: `!code <your_code>`")
+                await interaction.user.send(f"After you have the authorization code or redirect URL, reply to this message with: `!code {provider_id} <your_code_or_url>`")
                 
+                self._pending_logins[interaction.user.id] = provider_id
                 await interaction.response.send_message("✅ I've sent you a DM with login instructions.", ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f"❌ Failed to initiate login: {e}", ephemeral=True)
@@ -89,18 +91,25 @@ class CortanaClient(discord.Client):
 
         # Handle !code for OAuth
         if isinstance(message.channel, discord.DMChannel) and message.content.startswith("!code "):
-            code = message.content[6:].strip()
-            # We need to find which provider the user is logging into. 
-            # For now, we assume Anthropic as it's our only OAuth provider.
-            prov = get_provider("anthropic")
+            parts = message.content[6:].strip().split(" ", 1)
+            if len(parts) < 2:
+                await message.channel.send("❌ Invalid format. Use: `!code <provider_id> <code_or_url>`")
+                return
+            
+            provider_id = parts[0]
+            code = parts[1]
+            
+            prov = get_provider(provider_id)
             if prov and isinstance(prov, OAuthProviderInterface):
                 try:
                     from .providers.oauth import store_credentials
                     creds = await prov.complete_login(message.author.id, code)
                     await store_credentials(message.author.id, prov.id, creds)
-                    await message.channel.send(f"✅ Successfully logged in to **{prov.name}**! You can now use Claude models with your own account.")
+                    await message.channel.send(f"✅ Successfully logged in to **{prov.name}**! You can now use its models with your own account.")
                 except Exception as e:
                     await message.channel.send(f"❌ Login failed: {e}")
+            else:
+                await message.channel.send(f"❌ Unknown or non-OAuth provider: `{provider_id}`")
             return
 
         # 1. Retrieve Context from Zep
