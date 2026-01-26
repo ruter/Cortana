@@ -5,17 +5,25 @@ from .config import config
 from . import agent
 from .memory import memory_client
 from .scheduler import ReminderScheduler
+from .providers import get_oauth_providers, get_provider
+from .providers.base import OAuthProviderInterface
+from .models import MODELS, find_model_by_id
 
 class SettingsGroup(app_commands.Group):
     def __init__(self):
         super().__init__(name="settings", description="Cortana settings")
 
-    @app_commands.command(name="model", description="Change the LLM model (e.g. gpt-4o, gemini-1.5-pro)")
+    @app_commands.command(name="model", description="Change the LLM model")
     @app_commands.describe(model_name="The name of the model to use")
     async def model(self, interaction: discord.Interaction, model_name: str):
+        model_info = find_model_by_id(model_name)
+        if not model_info:
+            await interaction.response.send_message(f"❌ Unknown model: **{model_name}**. Use `/models` to see available models.", ephemeral=True)
+            return
+
         try:
-            agent.update_agent_model(model_name)
-            await interaction.response.send_message(f"✅ Model updated to **{model_name}** for this session.")
+            await agent.update_agent_model(model_name)
+            await interaction.response.send_message(f"✅ Model updated to **{model_info.name}** ({model_info.provider}) for this session.")
             print(f"Model updated to {model_name} by {interaction.user}")
         except Exception as e:
             await interaction.response.send_message(f"❌ Failed to update model: {e}", ephemeral=True)
@@ -28,6 +36,39 @@ class CortanaClient(discord.Client):
     
     async def setup_hook(self):
         self.tree.add_command(SettingsGroup())
+        
+        # Add /models command
+        @self.tree.command(name="models", description="List all available AI models")
+        async def models(interaction: discord.Interaction):
+            embed = discord.Embed(title="Available AI Models", color=discord.Color.blue())
+            for provider, provider_models in MODELS.items():
+                model_list = "\n".join([f"- `{m.id}`: {m.name}" for m in provider_models.values()])
+                embed.add_field(name=provider.capitalize(), value=model_list, inline=False)
+            await interaction.response.send_message(embed=embed)
+
+        # Add /login command
+        @self.tree.command(name="login", description="Login to an AI provider (e.g. Anthropic)")
+        @app_commands.describe(provider_id="The ID of the provider to login to")
+        async def login(interaction: discord.Interaction, provider_id: str):
+            prov = get_provider(provider_id)
+            if not prov or not isinstance(prov, OAuthProviderInterface):
+                await interaction.response.send_message(f"❌ Provider `{provider_id}` does not support OAuth login.", ephemeral=True)
+                return
+
+            try:
+                auth_info = await prov.login(interaction.user.id)
+                instructions = auth_info.instructions or "Please follow the link to authorize."
+                
+                embed = discord.Embed(title=f"Login to {prov.name}", description=instructions, color=discord.Color.gold())
+                embed.add_field(name="Authorization URL", value=f"[Click here to login]({auth_info.url})")
+                
+                await interaction.user.send(embed=embed)
+                await interaction.user.send("After you have the authorization code, reply to this message with: `!code <your_code>`")
+                
+                await interaction.response.send_message("✅ I've sent you a DM with login instructions.", ephemeral=True)
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Failed to initiate login: {e}", ephemeral=True)
+
         await self.tree.sync()
         print("Slash commands synced")
 
@@ -46,11 +87,21 @@ class CortanaClient(discord.Client):
         if message.author.id == self.user.id:
             return
 
-        # Optional: Only respond to mentions or specific channels
-        # if not self.user.mentioned_in(message):
-        #     return
-
-        print(f"Message from {message.author}: {message.content}")
+        # Handle !code for OAuth
+        if isinstance(message.channel, discord.DMChannel) and message.content.startswith("!code "):
+            code = message.content[6:].strip()
+            # We need to find which provider the user is logging into. 
+            # For now, we assume Anthropic as it's our only OAuth provider.
+            prov = get_provider("anthropic")
+            if prov and isinstance(prov, OAuthProviderInterface):
+                try:
+                    from .providers.oauth import store_credentials
+                    creds = await prov.complete_login(message.author.id, code)
+                    await store_credentials(message.author.id, prov.id, creds)
+                    await message.channel.send(f"✅ Successfully logged in to **{prov.name}**! You can now use Claude models with your own account.")
+                except Exception as e:
+                    await message.channel.send(f"❌ Login failed: {e}")
+            return
 
         # 1. Retrieve Context from Zep
         user_id = str(message.author.id)
@@ -87,10 +138,6 @@ class CortanaClient(discord.Client):
         except Exception as e:
             print(f"Zep memory retrieval error: {e}")
             zep_context = "No previous context."
-            
-        except Exception as e:
-            print(f"Zep Error: {e}")
-            zep_context = "Memory system unavailable."
 
         # 2. Run Agent
         user_info = {
@@ -106,7 +153,9 @@ class CortanaClient(discord.Client):
 
         try:
             async with message.channel.typing():
-                result = await agent.cortana_agent.run(message.content, deps=deps)
+                # Get user-specific agent
+                user_agent = await agent.get_agent(message.author.id)
+                result = await user_agent.run(message.content, deps=deps)
                 response_text = result.output if hasattr(result, 'output') else str(result)
                 
                 # 3. Send Response

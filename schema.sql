@@ -49,3 +49,15 @@ create index if not exists idx_todos_user_id on todos(user_id);
 create index if not exists idx_calendar_events_user_id on calendar_events(user_id);
 create index if not exists idx_reminders_user_id on reminders(user_id);
 create index if not exists idx_reminders_remind_time on reminders(remind_time) where is_sent = false;
+
+-- Provider Credentials Table
+create table if not exists provider_credentials (
+  user_id bigint not null references user_settings(user_id),
+  provider_id text not null,
+  credentials jsonb not null, -- Stores access_token, refresh_token, expires_at, etc.
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  primary key (user_id, provider_id)
+);
+
+create index if not exists idx_provider_credentials_user_id on provider_credentials(user_id);

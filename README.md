@@ -8,17 +8,13 @@ Built with **Python**, **discord.py**, and **PydanticAI**, following a "Thin Cli
 
 ## Features
 
-- 🧠 **Bionic Memory**: Powered by **Zep**. Remembers facts about you across conversations.
+-- 🧠 **Bionic Memory**: Powered by **Zep**. Remembers facts about you across conversations.
 - ✅ **Task Management**: Manage To-Dos and Calendar events directly from Discord.
 - 📅 **Calendar Integration**: Smart scheduling with conflict detection.
-- 💬 **Natural Interaction**: Powered by LLMs (OpenAI/Anthropic) for fluid, witty conversations.
+- 💬 **Natural Interaction**: Powered by LLMs (OpenAI/Anthropic/Google) for fluid, witty conversations.
 - ☁️ **Cloud Native**: Uses **Supabase** for data persistence and **Zep** for memory vectorization.
-
-## Prerequisites
-
-- Python 3.10+
-- **Supabase** Project (PostgreSQL)
-- **Zep** Account (Memory Service)
+- 🛠️ **Coding Agent**: Execute commands, manage files, and create custom tools (skills).
+- 🤖 **Provider & Model Management**: Support for multiple AI providers and models, including OAuth login for user-owned accounts.Memory Service)
 - **OpenAI** or **Anthropic** API Key
 - **Discord** Bot Token
 
@@ -63,6 +59,14 @@ Run the bot:
 ```bash
 python -m src.main
 ```
+
+### Provider & Model Commands
+
+| Command | Description |
+|---------|-------------|
+| `/models` | List all available AI models and providers |
+| `/settings model <model_id>` | Switch the active model for the session |
+| `/login <provider_id>` | Login to a provider (e.g., `anthropic`) to use your own account |
 
 ## Deployment with Docker
 
