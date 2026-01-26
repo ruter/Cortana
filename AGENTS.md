@@ -12,6 +12,7 @@
 - **Database:** `Supabase` (PostgreSQL)
 - **Web Scraping:** `aiohttp`, `BeautifulSoup`
 - **Search Integration:** `Exa API` (optional, for web search)
+- **Coding Agent:** Pi Coding Agent capabilities (ported from `badlogic/pi-mono`)
 
 ---
 
@@ -69,13 +70,19 @@ cortana-bot/
 │   ├── database.py          # Supabase client singleton
 │   ├── memory.py            # Zep async client singleton
 │   ├── scheduler.py         # Background reminder scheduler
-│   └── tools.py             # Agent tools (CRUD operations, search, etc.)
+│   ├── skills.py            # Skills system (Pi Coding Agent)
+│   └── tools.py             # Agent tools (CRUD, search, coding, etc.)
 │
 ├── tests/
+│   ├── test_coding_tools.py # Coding tools tests
+│   ├── test_skills.py       # Skills system tests
 │   ├── test_exa.py          # Web search functionality tests
 │   ├── test_fetch.py        # URL fetching tests
 │   ├── test_reminders.py    # Reminder scheduling tests
 │   └── verify_flow.py       # End-to-end flow verification
+│
+├── workspace/               # Workspace directory (mounted volume)
+│   └── skills/              # Global skills
 │
 ├── schema.sql               # Database schema (user_settings, todos, calendar_events, reminders)
 ├── requirements.txt         # Python dependencies
@@ -216,6 +223,12 @@ memory_client = AsyncZep(api_key=config.ZEP_API_KEY)
 - `fetch_url(url)`: Scrape webpage and extract text.
 - `search_web_exa(query)`: Search web using Exa API.
 - `get_contents_exa(exa_result_id)`: Fetch content from Exa search result.
+
+#### Coding Tools (Pi Coding Agent)
+- `execute_bash(command, timeout)`: Execute shell commands in the container.
+- `read_file(path, offset, limit)`: Read file contents with optional line range.
+- `write_file(path, content)`: Create or overwrite files.
+- `edit_file(path, old_text, new_text)`: Make surgical edits to files.
 
 **Important Notes:**
 - All tools take `ctx: RunContext[Dict[str, Any]]` as first param to access user info.
@@ -408,11 +421,26 @@ DEFAULT_TIMEZONE=America/New_York                # User timezone
 LOG_LEVEL=INFO                                   # Logging level
 ```
 
+### Coding Agent Variables
+```env
+ENABLE_BASH_TOOL=true                            # Enable bash execution
+ENABLE_FILE_TOOLS=true                           # Enable file read/write/edit
+ENABLE_SKILLS=true                               # Enable skills system
+WORKSPACE_DIR=/workspace                         # Workspace directory
+SKILLS_DIR=/workspace/skills                     # Skills directory
+BASH_TIMEOUT_DEFAULT=60                          # Default bash timeout (seconds)
+BASH_OUTPUT_MAX_LINES=500                        # Max output lines
+BASH_OUTPUT_MAX_BYTES=51200                      # Max output bytes (50KB)
+FILE_READ_MAX_LINES=1000                         # Max lines to read
+```
+
 ---
 
 ## 8 · Testing
 
 ### Test Files
+- `test_coding_tools.py`: Coding tools (bash, read, write, edit).
+- `test_skills.py`: Skills system.
 - `test_exa.py`: Web search functionality.
 - `test_fetch.py`: URL scraping/fetching.
 - `test_reminders.py`: Reminder scheduling.
@@ -474,6 +502,9 @@ python -m src.main
 | **Thread** | A conversation context in Zep (one per user). |
 | **Reminder** | A scheduled notification sent via Discord DM. |
 | **Exa** | Third-party web search API. |
+| **Skill** | A custom CLI tool defined by a SKILL.md file. |
+| **Workspace** | Directory for file operations and skills. |
+| **Pi Coding Agent** | Coding agent capabilities ported from badlogic/pi-mono. |
 
 ---
 
@@ -503,6 +534,72 @@ When working with this codebase, prioritize:
 
 ---
 
-**Document Version:** 1.0  
+---
+
+## 14 · Coding Agent (Pi Coding Agent Capabilities)
+
+### 14.1 Overview
+
+Cortana includes coding agent capabilities ported from [badlogic/pi-mono](https://github.com/badlogic/pi-mono)'s `mom` package. This enables command execution, file management, and custom tool creation.
+
+### 14.2 Skills System
+
+Skills are custom CLI tools that Cortana can create and use for recurring tasks.
+
+**Directory Structure:**
+```
+/workspace/
+├── skills/                    # Global skills (shared)
+│   └── skill-name/
+│       ├── SKILL.md           # Skill definition
+│       └── script.py          # Implementation
+└── users/{user_id}/skills/    # User-specific skills
+    └── skill-name/
+        ├── SKILL.md
+        └── ...
+```
+
+**SKILL.md Format:**
+```markdown
+---
+name: skill-name
+description: Short description
+---
+
+# Skill Name
+
+Usage instructions here.
+Scripts are in: {baseDir}/
+```
+
+### 14.3 Adding Coding Tools
+
+1. **Define tool in `tools.py`:**
+   ```python
+   async def my_coding_tool(ctx: RunContext[Dict[str, Any]], param: str) -> str:
+       """Tool description."""
+       # Implementation
+       return "Result"
+   ```
+
+2. **Register conditionally in `agent.py`:**
+   ```python
+   if config.ENABLE_MY_TOOL:
+       agent.tool(my_coding_tool)
+   ```
+
+3. **Update system prompt** in `_get_coding_tools_prompt()` if needed.
+
+### 14.4 Security Considerations
+
+- Cortana runs in Docker, providing container isolation.
+- Bash commands execute within the container's security context.
+- File operations are restricted to the workspace directory.
+- Timeout limits prevent runaway processes.
+- Output truncation prevents memory exhaustion.
+
+---
+
+**Document Version:** 1.1  
 **Last Updated:** January 26, 2025  
 **Project:** Cortana Discord Bot

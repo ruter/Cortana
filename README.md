@@ -1,57 +1,47 @@
-![](https://img.shields.io/badge/Gemini%20Assisted-100%25-00a67d?logo=googlegemini)
+# Cortana: Your Bionic Personal Assistant
 
-# Cortana - Discord Personal Assistant
-
-Cortana is an intelligent Discord bot designed to be a personalized digital companion. She features **bionic memory** (Short-Term & Long-Term), **task management** (Todos, Calendar), and a unique personality.
-
+Cortana is a high-performance, proactive personal assistant bot for Discord, designed to manage your life with precision and a touch of wit. 
 Built with **Python**, **discord.py**, and **PydanticAI**, following a "Thin Client, Fat Cloud" architecture.
 
 ## Features
 
--- 🧠 **Bionic Memory**: Powered by **Zep**. Remembers facts about you across conversations.
+- 🧠 **Bionic Memory**: Powered by **Zep**. Remembers facts about you across conversations.
 - ✅ **Task Management**: Manage To-Dos and Calendar events directly from Discord.
 - 📅 **Calendar Integration**: Smart scheduling with conflict detection.
 - 💬 **Natural Interaction**: Powered by LLMs (OpenAI/Anthropic/Google) for fluid, witty conversations.
 - ☁️ **Cloud Native**: Uses **Supabase** for data persistence and **Zep** for memory vectorization.
 - 🛠️ **Coding Agent**: Execute commands, manage files, and create custom tools (skills).
-- 🤖 **Provider & Model Management**: Support for multiple AI providers and models, including OAuth login for user-owned accounts.Memory Service)
+- 🤖 **Provider & Model Management**: Support for multiple AI providers and models, including OAuth login for user-owned accounts.
+
+## Prerequisites
+
+- **Python 3.10+**
+- **Supabase** Account (Database)
+- **Zep Cloud** Account (Memory Service)
 - **OpenAI** or **Anthropic** API Key
 - **Discord** Bot Token
 
 ## Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd cortana-bot
-   ```
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/ruter/Cortana.git
+    cd Cortana
+    ```
 
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+2.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-3. **Environment Setup**
-   Copy `.env.example` to `.env` and fill in your credentials:
-   ```bash
-   cp .env.example .env
-   ```
-   
-   ```ini
-   DISCORD_TOKEN=...
-   SUPABASE_URL=...
-   SUPABASE_KEY=...
-   ZEP_API_KEY=...
-   EXA_API_KEY=...
-   
-   # LLM Configuration
-   LLM_BASE_URL=https://api.openai.com/v1
-   LLM_API_KEY=...
-   LLM_MODEL_NAME=gpt-4o
-   ```
+3.  **Configure Environment Variables:**
+    Copy `.env.example` to `.env` and fill in your credentials.
+    ```bash
+    cp .env.example .env
+    ```
 
-4. **Database Initialization**
-   Run the SQL script `schema.sql` in your Supabase SQL Editor to create the necessary tables (`user_settings`, `todos`, `calendar_events`).
+4.  **Database Setup:**
+    Run the SQL script `schema.sql` in your Supabase SQL Editor to create the necessary tables (`user_settings`, `todos`, `calendar_events`, `provider_credentials`).
 
 ## Usage
 
@@ -73,47 +63,16 @@ python -m src.main
 ### Using Docker Compose (Recommended)
 
 1.  Ensure you have Docker and Docker Compose installed.
-2.  Create your `.env` file as described in the Installation section.
-3.  Run the bot:
+2.  Update the `.env` file with your production credentials.
+3.  Build and start the container:
     ```bash
-    docker-compose up -d
-    ```
-4.  View logs:
-    ```bash
-    docker-compose logs -f
+    docker-compose up -d --build
     ```
 
-### Using Docker Manually
+## Documentation
 
-1.  Build the image:
-    ```bash
-    docker build -t cortana-bot .
-    ```
-2.  Run the container:
-    ```bash
-    docker run -d --name cortana-bot --env-file .env cortana-bot
-    ```
+- [Agent Architecture & Guidance](AGENTS.md) - Detailed guide on how Cortana's brain works.
 
-## Project Structure
+## License
 
-```
-cortana-bot/
-├── src/
-│   ├── agent.py           # PydanticAI Agent & System Prompt
-│   ├── config.py          # Env Config
-│   ├── database.py        # Supabase Client
-│   ├── main.py            # Discord Client Entry Point
-│   ├── memory.py          # Zep Client
-│   └── tools.py           # Agent Tools (Todos, Calendar, etc.)
-├── tests/                 # Verification scripts
-├── schema.sql             # Database Schema
-├── requirements.txt       # Python Dependencies
-└── README.md              # Documentation
-```
-
-## Architecture
-
-- **Interface**: `discord.py` handles real-time events.
-- **Brain**: `PydanticAI` orchestrates the LLM and tools.
-- **Memory**: `Zep` provides long-term fact extraction and session context.
-- **Storage**: `Supabase` stores structured business data.
+MIT

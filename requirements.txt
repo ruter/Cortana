@@ -8,3 +8,4 @@ tzdata
 beautifulsoup4
 aiohttp
 exa-py
+PyYAML
