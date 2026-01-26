@@ -407,3 +407,313 @@ async def cancel_reminder(ctx: RunContext[Dict[str, Any]], reminder_id: int) -> 
     except Exception as e:
         return f"Error cancelling reminder: {str(e)}"
 
+
+# --- Coding Tools ---
+# Ported from badlogic/pi-mono mom package for Pi Coding Agent capabilities
+
+import asyncio
+import os
+from pathlib import Path
+
+# Constants for output truncation
+DEFAULT_MAX_LINES = 500
+DEFAULT_MAX_BYTES = 51200  # 50KB
+
+
+def _truncate_output(output: str, max_lines: int = DEFAULT_MAX_LINES, max_bytes: int = DEFAULT_MAX_BYTES) -> tuple[str, bool, dict]:
+    """
+    Truncate output to last N lines or N bytes, whichever is hit first.
+    
+    Returns:
+        tuple: (truncated_content, was_truncated, truncation_info)
+    """
+    if not output:
+        return output, False, {}
+    
+    lines = output.split('\n')
+    total_lines = len(lines)
+    total_bytes = len(output.encode('utf-8'))
+    
+    # Check if truncation is needed
+    if total_lines <= max_lines and total_bytes <= max_bytes:
+        return output, False, {}
+    
+    # Truncate by lines first
+    if total_lines > max_lines:
+        lines = lines[-max_lines:]
+    
+    result = '\n'.join(lines)
+    result_bytes = len(result.encode('utf-8'))
+    
+    # Further truncate by bytes if needed
+    if result_bytes > max_bytes:
+        # Binary search for the right cut point
+        while result_bytes > max_bytes and lines:
+            lines = lines[1:]  # Remove from the beginning (keep tail)
+            result = '\n'.join(lines)
+            result_bytes = len(result.encode('utf-8'))
+    
+    truncation_info = {
+        'total_lines': total_lines,
+        'output_lines': len(lines),
+        'total_bytes': total_bytes,
+        'output_bytes': result_bytes,
+        'truncated_by': 'lines' if total_lines > max_lines else 'bytes'
+    }
+    
+    return result, True, truncation_info
+
+
+def _format_size(bytes_count: int) -> str:
+    """Format byte count as human-readable string."""
+    if bytes_count < 1024:
+        return f"{bytes_count}B"
+    elif bytes_count < 1024 * 1024:
+        return f"{bytes_count / 1024:.1f}KB"
+    else:
+        return f"{bytes_count / (1024 * 1024):.1f}MB"
+
+
+async def execute_bash(ctx: RunContext[Dict[str, Any]], command: str, timeout: Optional[int] = None) -> str:
+    """
+    Execute a bash command in the container environment.
+    
+    This is the primary tool for getting things done - installing packages,
+    running scripts, system commands, etc. Output is truncated to the last
+    500 lines or 50KB (whichever is hit first).
+    
+    Args:
+        command: The bash command to execute.
+        timeout: Optional timeout in seconds (default: 60).
+    
+    Returns:
+        Command output (stdout + stderr combined).
+    """
+    if timeout is None:
+        timeout = config.BASH_TIMEOUT_DEFAULT if hasattr(config, 'BASH_TIMEOUT_DEFAULT') else 60
+    
+    try:
+        # Create subprocess
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,  # Combine stderr into stdout
+            cwd=config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
+        )
+        
+        try:
+            # Wait for completion with timeout
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout
+            )
+            output = stdout.decode('utf-8', errors='replace') if stdout else ""
+            exit_code = process.returncode
+            
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return f"Error: Command timed out after {timeout} seconds."
+        
+        # Truncate output if needed
+        truncated_output, was_truncated, truncation_info = _truncate_output(output)
+        
+        # Build result
+        result = truncated_output if truncated_output else "(no output)"
+        
+        if was_truncated:
+            start_line = truncation_info['total_lines'] - truncation_info['output_lines'] + 1
+            end_line = truncation_info['total_lines']
+            result += f"\n\n[Showing lines {start_line}-{end_line} of {truncation_info['total_lines']} ({_format_size(truncation_info['output_bytes'])} of {_format_size(truncation_info['total_bytes'])})]"
+        
+        if exit_code != 0:
+            result += f"\n\nCommand exited with code {exit_code}"
+        
+        return result
+        
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
+
+
+async def read_file(ctx: RunContext[Dict[str, Any]], path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
+    """
+    Read file contents with optional line range.
+    
+    Args:
+        path: Path to the file to read (absolute or relative to workspace).
+        offset: Starting line number (1-indexed, optional).
+        limit: Number of lines to read from offset (optional).
+    
+    Returns:
+        File contents with line numbers for context.
+    """
+    try:
+        # Resolve path
+        workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
+        if not os.path.isabs(path):
+            path = os.path.join(workspace, path)
+        
+        # Security check - ensure path is within allowed directories
+        real_path = os.path.realpath(path)
+        
+        if not os.path.exists(real_path):
+            return f"Error: File not found: {path}"
+        
+        if not os.path.isfile(real_path):
+            return f"Error: Path is not a file: {path}"
+        
+        # Check if file is binary
+        try:
+            with open(real_path, 'rb') as f:
+                chunk = f.read(8192)
+                if b'\x00' in chunk:
+                    return f"Error: Cannot read binary file: {path}"
+        except Exception as e:
+            return f"Error checking file: {str(e)}"
+        
+        # Read file
+        with open(real_path, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+        
+        total_lines = len(lines)
+        
+        if total_lines == 0:
+            return f"File is empty: {path}"
+        
+        # Apply offset and limit
+        start_idx = 0
+        end_idx = total_lines
+        
+        if offset is not None:
+            start_idx = max(0, offset - 1)  # Convert to 0-indexed
+        
+        if limit is not None:
+            end_idx = min(total_lines, start_idx + limit)
+        
+        # Apply default limit if file is too large
+        max_lines = config.FILE_READ_MAX_LINES if hasattr(config, 'FILE_READ_MAX_LINES') else 1000
+        if end_idx - start_idx > max_lines:
+            end_idx = start_idx + max_lines
+        
+        selected_lines = lines[start_idx:end_idx]
+        
+        # Format with line numbers
+        result_lines = []
+        for i, line in enumerate(selected_lines, start=start_idx + 1):
+            # Remove trailing newline for cleaner display
+            line_content = line.rstrip('\n\r')
+            result_lines.append(f"{i:4d} | {line_content}")
+        
+        result = '\n'.join(result_lines)
+        
+        # Add truncation notice if applicable
+        if end_idx < total_lines or start_idx > 0:
+            result += f"\n\n[Showing lines {start_idx + 1}-{end_idx} of {total_lines}]"
+        
+        return result
+        
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
+
+async def write_file(ctx: RunContext[Dict[str, Any]], path: str, content: str) -> str:
+    """
+    Create or overwrite a file with the given content.
+    
+    Parent directories will be created automatically if they don't exist.
+    
+    Args:
+        path: Path to the file to write (absolute or relative to workspace).
+        content: Content to write to the file.
+    
+    Returns:
+        Confirmation message with file path and bytes written.
+    """
+    try:
+        # Resolve path
+        workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
+        if not os.path.isabs(path):
+            path = os.path.join(workspace, path)
+        
+        real_path = os.path.realpath(path)
+        
+        # Create parent directories if needed
+        parent_dir = os.path.dirname(real_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+        
+        # Write file
+        with open(real_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        bytes_written = len(content.encode('utf-8'))
+        
+        return f"File written: {path} ({_format_size(bytes_written)})"
+        
+    except Exception as e:
+        return f"Error writing file: {str(e)}"
+
+
+async def edit_file(ctx: RunContext[Dict[str, Any]], path: str, old_text: str, new_text: str) -> str:
+    """
+    Make surgical edits to a file by replacing exact text matches.
+    
+    This tool finds the exact `old_text` in the file and replaces it with `new_text`.
+    Use this for small, targeted edits rather than rewriting entire files.
+    
+    Args:
+        path: Path to the file to edit (absolute or relative to workspace).
+        old_text: Exact text to find and replace (must match exactly).
+        new_text: Replacement text.
+    
+    Returns:
+        Confirmation with a preview of the changes made.
+    """
+    try:
+        # Resolve path
+        workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
+        if not os.path.isabs(path):
+            path = os.path.join(workspace, path)
+        
+        real_path = os.path.realpath(path)
+        
+        if not os.path.exists(real_path):
+            return f"Error: File not found: {path}"
+        
+        if not os.path.isfile(real_path):
+            return f"Error: Path is not a file: {path}"
+        
+        # Read current content
+        with open(real_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Check if old_text exists
+        if old_text not in content:
+            # Provide helpful error message
+            if old_text.strip() in content:
+                return f"Error: Exact text not found. Note: The text exists but with different whitespace. Make sure `old_text` matches exactly including spaces and newlines."
+            return f"Error: Text to replace not found in file. Make sure `old_text` matches exactly."
+        
+        # Count occurrences
+        occurrences = content.count(old_text)
+        
+        # Perform replacement
+        new_content = content.replace(old_text, new_text)
+        
+        # Write back
+        with open(real_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        
+        # Generate diff preview
+        old_preview = old_text[:100] + "..." if len(old_text) > 100 else old_text
+        new_preview = new_text[:100] + "..." if len(new_text) > 100 else new_text
+        
+        result = f"File edited: {path}\n"
+        result += f"Replaced {occurrences} occurrence(s)\n\n"
+        result += f"**Before:**\n```\n{old_preview}\n```\n\n"
+        result += f"**After:**\n```\n{new_preview}\n```"
+        
+        return result
+        
+    except Exception as e:
+        return f"Error editing file: {str(e)}"
