@@ -16,6 +16,13 @@ COPY requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Clone and install rotator_library (has packaging issues with pip install from git)
+RUN git clone --depth 1 https://github.com/Mirrowel/LLM-API-Key-Proxy.git /opt/rotator \
+    && rm -rf /opt/rotator/.git
+
+# Add rotator_library to Python path
+ENV PYTHONPATH="/opt/rotator/src/rotator_library:${PYTHONPATH}"
+
 # Copy the rest of the application code
 COPY src/ ./src/
 
