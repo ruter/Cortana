@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from .config import config
+from .oauth_handler import get_oauth_handler
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,31 @@ def normalize_model_name(model: str) -> str:
         return f"openai/{model}"
 
 
+async def _setup_oauth_tokens() -> Dict[str, str]:
+    """
+    Setup OAuth tokens for configured providers.
+    
+    Returns dict of provider -> access_token for providers that need OAuth.
+    """
+    oauth_tokens = {}
+    try:
+        oauth_handler = await get_oauth_handler()
+        
+        # Get available OAuth providers
+        for provider in oauth_handler.get_available_providers():
+            # Get first credential for each provider
+            token = await oauth_handler.get_token(provider, credential_index=0)
+            if token:
+                oauth_tokens[provider] = token
+                logger.debug(f"Setup OAuth token for {provider}")
+            else:
+                logger.warning(f"Failed to get OAuth token for {provider}")
+    except Exception as e:
+        logger.warning(f"Error setting up OAuth tokens: {e}")
+    
+    return oauth_tokens
+
+
 async def rotating_completion(
     model: Optional[str] = None,
     messages: Optional[List[Dict[str, Any]]] = None,
@@ -184,6 +210,14 @@ async def rotating_completion(
     
     # Normalize model name
     model = normalize_model_name(model)
+    
+    # Setup OAuth tokens if available
+    oauth_tokens = await _setup_oauth_tokens()
+    if oauth_tokens:
+        # Add OAuth tokens to environment for providers that need them
+        for provider, token in oauth_tokens.items():
+            env_var = f"{provider.upper()}_ACCESS_TOKEN"
+            os.environ[env_var] = token
     
     # Try to get rotating client
     client = await get_rotating_client()
@@ -558,6 +592,73 @@ async def get_detailed_usage() -> Dict[str, Any]:
         **summary,
         **pool_status,
     }
+
+
+# =============================================================================
+# OAuth Token Management
+# =============================================================================
+
+async def get_oauth_status() -> Dict[str, Any]:
+    """
+    Get status of all configured OAuth credentials.
+    
+    Returns:
+        Dict with provider info and token expiry status
+    """
+    try:
+        oauth_handler = await get_oauth_handler()
+        return oauth_handler.list_all_credentials()
+    except Exception as e:
+        logger.error(f"Error getting OAuth status: {e}")
+        return {}
+
+
+async def refresh_oauth_token(provider: str, credential_index: int = 0) -> bool:
+    """
+    Manually refresh an OAuth token.
+    
+    Args:
+        provider: Provider name (e.g., "gemini_cli", "qwen_code")
+        credential_index: Which credential to refresh
+        
+    Returns:
+        True if refresh successful
+    """
+    try:
+        oauth_handler = await get_oauth_handler()
+        return await oauth_handler.refresh_token(provider, credential_index)
+    except Exception as e:
+        logger.error(f"Error refreshing OAuth token: {e}")
+        return False
+
+
+async def get_oauth_credentials_info() -> Dict[str, Any]:
+    """
+    Get information about configured OAuth providers and credentials.
+    
+    Returns:
+        Dict with provider counts and status
+    """
+    try:
+        oauth_handler = await get_oauth_handler()
+        
+        providers = oauth_handler.get_available_providers()
+        if not providers:
+            return {"available": False, "message": "No OAuth credentials configured"}
+        
+        return {
+            "available": True,
+            "providers": {
+                provider: {
+                    "count": oauth_handler.get_credential_count(provider),
+                    "config": oauth_handler.PROVIDER_CONFIGS.get(provider, {}),
+                }
+                for provider in providers
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting OAuth credentials info: {e}")
+        return {"available": False, "error": str(e)}
 
 
 # =============================================================================

@@ -214,6 +214,92 @@ class SettingsGroup(app_commands.Group):
             logger.error(f"Failed to get usage: {e}")
             await interaction.response.send_message(f"❌ Failed to get usage: {e}", ephemeral=True)
 
+    @app_commands.command(name="oauth-status")
+    async def oauth_status(self, interaction: discord.Interaction):
+        """Show OAuth credentials status and token expiry times."""
+        try:
+            from .rotator_client import get_oauth_status
+            
+            await interaction.response.defer()
+            
+            oauth_status = await get_oauth_status()
+            
+            if not oauth_status:
+                await interaction.followup.send("❌ No OAuth credentials configured")
+                return
+            
+            # Create embed
+            embed = discord.Embed(
+                title="🔐 OAuth Credentials Status",
+                color=discord.Color.blue(),
+                timestamp=datetime.now()
+            )
+            
+            # Show status for each provider
+            for provider, creds in oauth_status.items():
+                if not creds:
+                    continue
+                
+                status_lines = []
+                for i, cred in enumerate(creds):
+                    expired = "❌ EXPIRED" if cred["is_expired"] else "✅ Valid"
+                    time_left = cred.get("time_to_expiry")
+                    
+                    if time_left is not None:
+                        hours = time_left // 3600
+                        mins = (time_left % 3600) // 60
+                        time_str = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
+                        status_lines.append(f"Credential {i}: {expired} ({time_str})")
+                    else:
+                        status_lines.append(f"Credential {i}: {expired}")
+                    
+                    if cred.get("last_refreshed"):
+                        status_lines.append(f"  Last refreshed: {cred['last_refreshed']}")
+                
+                if status_lines:
+                    embed.add_field(
+                        name=f"{provider.upper()}",
+                        value="\n".join(status_lines),
+                        inline=False
+                    )
+            
+            embed.set_footer(text="Use /settings oauth-refresh to manually refresh tokens")
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Failed to get OAuth status: {e}")
+            await interaction.followup.send(f"❌ Failed to get OAuth status: {e}", ephemeral=True)
+
+    @app_commands.command(name="oauth-refresh")
+    async def oauth_refresh(self, interaction: discord.Interaction, provider: str):
+        """Manually refresh an OAuth token for a specific provider."""
+        try:
+            from .rotator_client import refresh_oauth_token
+            
+            await interaction.response.defer()
+            
+            # Attempt refresh
+            success = await refresh_oauth_token(provider.lower())
+            
+            if success:
+                embed = discord.Embed(
+                    title="✅ OAuth Token Refreshed",
+                    description=f"Successfully refreshed token for **{provider}**",
+                    color=discord.Color.green()
+                )
+            else:
+                embed = discord.Embed(
+                    title="❌ OAuth Refresh Failed",
+                    description=f"Failed to refresh token for **{provider}**\n\nMake sure:\n• Credential file is writable\n• Refresh token is not revoked\n• Provider endpoint is accessible",
+                    color=discord.Color.red()
+                )
+            
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"OAuth refresh error: {e}")
+            await interaction.followup.send(f"❌ OAuth refresh error: {e}", ephemeral=True)
+
 
 class CortanaClient(discord.Client):
     """Main Discord client for Cortana."""

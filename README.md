@@ -98,6 +98,54 @@ ENABLE_ROTATOR=false
 
 The rotator will also auto-wrap a single `LLM_API_KEY` if no provider-specific keys are found.
 
+### OAuth Support
+
+Cortana supports OAuth credentials for providers that require them:
+
+**Supported OAuth Providers:**
+- **Gemini CLI** - Google Cloud authentication
+- **Qwen Code** - Alibaba Cloud integration
+- **Antigravity** - Custom provider
+- **iFlow** - Workflow integration
+
+**Configuration:**
+
+```ini
+# OAuth Credentials (file paths or JSON)
+GEMINI_CLI_OAUTH_CREDENTIALS=/path/to/gemini_oauth.json
+QWEN_CODE_OAUTH_CREDENTIALS=/path/to/qwen_oauth.json
+ANTIGRAVITY_OAUTH_CREDENTIALS=/path/to/antigravity_oauth.json
+IFLOW_OAUTH_CREDENTIALS=/path/to/iflow_oauth.json
+
+# Optional: Provider-specific client credentials for token refresh
+GEMINI_CLIENT_ID=your_client_id
+GEMINI_CLIENT_SECRET=your_client_secret
+QWEN_CLIENT_ID=your_client_id
+QWEN_CLIENT_SECRET=your_client_secret
+```
+
+**Credential File Format:**
+
+```json
+{
+  "access_token": "ya29.a0AfH6SMB...",
+  "refresh_token": "1//0gP...",
+  "token_type": "Bearer",
+  "expires_at": 1645123456.1234
+}
+```
+
+**Discord Commands:**
+
+- `/settings oauth-status` - Show OAuth token expiry status
+- `/settings oauth-refresh <provider>` - Manually refresh a token
+
+**Important Notes:**
+- Credentials file must be **writable** (rotator updates it with new tokens)
+- Credentials must contain **refresh_token** for auto-refresh to work
+- Tokens are automatically refreshed when about to expire
+- Refresh failures are logged; rotator falls back to next credential if available
+
 ---
 
 ## Coding Agent Capabilities
