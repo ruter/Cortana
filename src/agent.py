@@ -1,13 +1,17 @@
-import os
+"""
+Cortana Agent Module
+====================
 
+Defines the PydanticAI agent with dynamic system prompts, tool registration,
+and integration with the RotatingClient for resilient LLM access.
+"""
+
+import os
+import logging
 from datetime import datetime
-from google.genai import Client
-from google.genai.types import HttpOptions
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.providers.google import GoogleProvider
 
 from .config import config
 from .tools import (
@@ -20,6 +24,9 @@ from .tools import (
     execute_bash, read_file, write_file, edit_file
 )
 from .skills import load_all_skills, format_skills_for_prompt
+from .rotator_client import normalize_model_name, get_key_pool_status
+
+logger = logging.getLogger(__name__)
 
 
 def _get_coding_tools_prompt(user_id: str) -> str:
@@ -187,33 +194,135 @@ You have access to Long-Term Memory (Facts) and Short-Term Context (Recent Conve
 """
     return prompt
 
-def initialize_agent():
-    if not config.ONE_BALANCE_AUTH_KEY:
-        # Configure OpenAI environment variables for custom endpoints
-        os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
-        os.environ['OPENAI_BASE_URL'] = config.LLM_BASE_URL
-        # Define the Agent with string-based model specification
-        agent = Agent(
-            f'openai:{config.LLM_MODEL_NAME}',
-            deps_type=Dict[str, Any],
-            system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
-        )
-    else:
-        client = Client(
-            api_key=config.LLM_API_KEY,
-            http_options=HttpOptions(
-                base_url=config.LLM_BASE_URL,
-                headers={"x-goog-api-key": config.ONE_BALANCE_AUTH_KEY}
-            )
-        )
-        provider = GoogleProvider(client=client)
-        agent = Agent(
-            GoogleModel(config.LLM_MODEL_NAME, provider=provider),
-            deps_type=Dict[str, Any],
-            system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
-        )
 
-    # Register Task Management Tools
+def _get_model_spec(model_name: str) -> str:
+    """
+    Convert model name to PydanticAI model specification.
+    
+    Handles both legacy format (gpt-4o) and new format (openai/gpt-4o).
+    """
+    normalized = normalize_model_name(model_name)
+    provider, model = normalized.split("/", 1)
+    
+    # Map provider names to PydanticAI prefixes
+    provider_map = {
+        "openai": "openai",
+        "gemini": "google",
+        "google": "google",
+        "anthropic": "anthropic",
+        "claude": "anthropic",
+        "groq": "groq",
+        "mistral": "mistral",
+    }
+    
+    pydantic_provider = provider_map.get(provider.lower(), "openai")
+    return f"{pydantic_provider}:{model}"
+
+
+def initialize_agent(model_name: Optional[str] = None) -> Agent:
+    """
+    Initialize the Cortana agent with the specified model.
+    
+    Uses RotatingClient for API key management when enabled.
+    Falls back to legacy single-key mode if rotator is disabled or unavailable.
+    
+    Args:
+        model_name: Optional model name override. Defaults to config.LLM_MODEL_NAME.
+    
+    Returns:
+        Configured PydanticAI Agent instance.
+    """
+    if model_name is None:
+        model_name = config.LLM_MODEL_NAME
+    
+    # Ensure rotator keys are loaded
+    config.load_rotator_keys()
+    
+    # Determine model specification
+    model_spec = _get_model_spec(model_name)
+    logger.info(f"Initializing agent with model: {model_spec}")
+    
+    # Check if we're using a custom Google endpoint with ONE_BALANCE
+    if config.ONE_BALANCE_AUTH_KEY and "google:" in model_spec:
+        # Use custom Google provider setup
+        try:
+            from google.genai import Client
+            from google.genai.types import HttpOptions
+            from pydantic_ai.models.google import GoogleModel
+            from pydantic_ai.providers.google import GoogleProvider
+            
+            client = Client(
+                api_key=config.LLM_API_KEY,
+                http_options=HttpOptions(
+                    base_url=config.LLM_BASE_URL,
+                    headers={"x-goog-api-key": config.ONE_BALANCE_AUTH_KEY}
+                )
+            )
+            provider = GoogleProvider(client=client)
+            _, model_id = model_spec.split(":", 1)
+            
+            agent = Agent(
+                GoogleModel(model_id, provider=provider),
+                deps_type=Dict[str, Any],
+                system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
+            )
+            logger.info("Using ONE_BALANCE Google provider")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Google provider: {e}, falling back to standard mode")
+            agent = _create_standard_agent(model_spec)
+    else:
+        # Standard agent creation with rotator support
+        agent = _create_standard_agent(model_spec)
+    
+    # Register all tools
+    _register_agent_tools(agent)
+    
+    # Register dynamic system prompt
+    agent.system_prompt(dynamic_system_prompt)
+    
+    return agent
+
+
+def _create_standard_agent(model_spec: str) -> Agent:
+    """
+    Create a standard PydanticAI agent with rotator-compatible configuration.
+    
+    Sets up environment variables for API key access (used by PydanticAI).
+    The actual key rotation happens at the LLM call level.
+    """
+    # Configure environment for PydanticAI's model initialization
+    # PydanticAI uses these env vars internally
+    if config.ROTATOR_API_KEYS:
+        # Use first available key for initialization (rotator handles rotation)
+        for provider, keys in config.ROTATOR_API_KEYS.items():
+            if keys:
+                if provider == "openai":
+                    os.environ['OPENAI_API_KEY'] = keys[0]
+                elif provider == "anthropic":
+                    os.environ['ANTHROPIC_API_KEY'] = keys[0]
+                elif provider in ("gemini", "google"):
+                    os.environ['GOOGLE_API_KEY'] = keys[0]
+    elif config.LLM_API_KEY:
+        # Legacy single-key mode
+        os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
+    
+    # Set base URL for OpenAI-compatible endpoints
+    if config.LLM_BASE_URL and "openai:" in model_spec:
+        os.environ['OPENAI_BASE_URL'] = config.LLM_BASE_URL
+    
+    agent = Agent(
+        model_spec,
+        deps_type=Dict[str, Any],
+        system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
+    )
+    
+    return agent
+
+
+def _register_agent_tools(agent: Agent) -> None:
+    """Register all tools with the agent."""
+    
+    # Task Management Tools
     agent.tool(add_todo)
     agent.tool(list_todos)
     agent.tool(complete_todo)
@@ -225,11 +334,13 @@ def initialize_agent():
     agent.tool(list_reminders)
     agent.tool(cancel_reminder)
     agent.tool(fetch_url)
+    
+    # Web Search Tools (optional)
     if config.EXA_API_KEY:
         agent.tool(search_web_exa)
         agent.tool(get_contents_exa)
     
-    # Register Coding Tools (Pi Coding Agent capabilities)
+    # Coding Tools (Pi Coding Agent capabilities)
     if config.ENABLE_BASH_TOOL:
         agent.tool(execute_bash)
     
@@ -237,15 +348,46 @@ def initialize_agent():
         agent.tool(read_file)
         agent.tool(write_file)
         agent.tool(edit_file)
+    
+    logger.debug("Agent tools registered successfully")
 
-    # Register System Prompt
-    agent.system_prompt(dynamic_system_prompt)
 
-    return agent
-
-cortana_agent = initialize_agent()
-
-def update_agent_model(model_name: str):
-    config.LLM_MODEL_NAME = model_name
+def update_agent_model(model_name: str) -> None:
+    """
+    Update the agent to use a different model.
+    
+    Supports both legacy format (gpt-4o) and provider format (openai/gpt-4o).
+    
+    Args:
+        model_name: The new model name to use.
+    """
     global cortana_agent
-    cortana_agent = initialize_agent()
+    
+    # Normalize and update config
+    normalized = normalize_model_name(model_name)
+    config.LLM_MODEL_NAME = normalized
+    
+    logger.info(f"Updating agent model to: {normalized}")
+    
+    # Reinitialize agent with new model
+    cortana_agent = initialize_agent(normalized)
+
+
+async def get_agent_status() -> Dict[str, Any]:
+    """
+    Get the current agent and rotator status.
+    
+    Returns:
+        Dict with model info, rotator status, and available providers.
+    """
+    pool_status = await get_key_pool_status()
+    
+    return {
+        "current_model": config.LLM_MODEL_NAME,
+        "normalized_model": normalize_model_name(config.LLM_MODEL_NAME),
+        **pool_status
+    }
+
+
+# Initialize the global agent instance
+cortana_agent = initialize_agent()

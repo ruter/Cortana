@@ -7,6 +7,19 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    # Mount the source code for easier development (optional, remove for production)
-    # volumes:
-    #   - ./src:/app/src
+    volumes:
+      # Workspace volume for coding tools, skills, and key usage tracking
+      - cortana-workspace:/workspace
+      # Optional: Mount OAuth credentials directory (for Gemini CLI, Antigravity, etc.)
+      # - ./credentials:/app/credentials:ro
+      # Optional: Mount source code for development
+      # - ./src:/app/src
+    environment:
+      # Ensure workspace paths are consistent
+      - WORKSPACE_DIR=/workspace
+      - SKILLS_DIR=/workspace/skills
+      - ROTATOR_USAGE_FILE_PATH=/workspace/key_usage.json
+
+volumes:
+  cortana-workspace:
+    driver: local

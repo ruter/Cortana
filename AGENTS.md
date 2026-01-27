@@ -69,17 +69,19 @@ cortana-bot/
 │   ├── config.py            # Environment variable management
 │   ├── database.py          # Supabase client singleton
 │   ├── memory.py            # Zep async client singleton
+│   ├── rotator_client.py    # RotatingClient singleton for LLM key rotation
 │   ├── scheduler.py         # Background reminder scheduler
 │   ├── skills.py            # Skills system (Pi Coding Agent)
 │   └── tools.py             # Agent tools (CRUD, search, coding, etc.)
 │
 ├── tests/
-│   ├── test_coding_tools.py # Coding tools tests
-│   ├── test_skills.py       # Skills system tests
-│   ├── test_exa.py          # Web search functionality tests
-│   ├── test_fetch.py        # URL fetching tests
-│   ├── test_reminders.py    # Reminder scheduling tests
-│   └── verify_flow.py       # End-to-end flow verification
+│   ├── test_coding_tools.py       # Coding tools tests
+│   ├── test_rotator_integration.py # Rotator integration tests
+│   ├── test_skills.py             # Skills system tests
+│   ├── test_exa.py                # Web search functionality tests
+│   ├── test_fetch.py              # URL fetching tests
+│   ├── test_reminders.py          # Reminder scheduling tests
+│   └── verify_flow.py             # End-to-end flow verification
 │
 ├── workspace/               # Workspace directory (mounted volume)
 │   └── skills/              # Global skills
@@ -600,6 +602,113 @@ Scripts are in: {baseDir}/
 
 ---
 
-**Document Version:** 1.1  
-**Last Updated:** January 26, 2025  
+## 15 · API Key Rotation (rotator_library)
+
+### 15.1 Overview
+
+Cortana integrates [rotator_library](https://github.com/Mirrowel/LLM-API-Key-Proxy) for resilient, multi-provider LLM access with automatic failover, intelligent error handling, and load distribution.
+
+### 15.2 Key Files
+
+| File | Responsibility |
+|------|----------------|
+| `rotator_client.py` | Singleton wrapper for `RotatingClient`, model name normalization, completion helpers |
+| `config.py` | Dynamic API key loading from environment, rotator configuration |
+
+### 15.3 How It Works
+
+1. **Key Loading**: On startup, `config.load_rotator_keys()` scans environment for patterns like `OPENAI_API_KEY_1`, `GEMINI_API_KEY`, etc.
+2. **Client Initialization**: `get_rotating_client()` creates a singleton `RotatingClient` with loaded keys.
+3. **Request Flow**: Agent calls → PydanticAI → LLM API (rotator handles key selection, retries, failover).
+4. **Error Handling**: Failed keys get escalating cooldowns; auth errors trigger immediate lockout.
+
+### 15.4 Configuration Reference
+
+```ini
+# Enable/disable rotator (falls back to legacy single-key if false)
+ENABLE_ROTATOR=true
+
+# Multi-key patterns
+OPENAI_API_KEY_1=sk-xxx
+OPENAI_API_KEY_2=sk-yyy
+GEMINI_API_KEY=AIza...
+ANTHROPIC_API_KEY=sk-ant-...
+
+# OAuth credentials (for Gemini CLI, Antigravity, etc.)
+GEMINI_CLI_OAUTH_CREDENTIALS=/path/to/creds.json
+
+# Tuning
+ROTATOR_MAX_RETRIES=2
+ROTATOR_GLOBAL_TIMEOUT=120
+ROTATOR_ROTATION_TOLERANCE=2.0
+ROTATOR_USAGE_FILE_PATH=key_usage.json
+
+# Model filtering (JSON)
+ROTATOR_IGNORE_MODELS={"openai": ["*-preview"]}
+ROTATOR_WHITELIST_MODELS={"openai": ["gpt-4o"]}
+```
+
+### 15.5 Model Name Format
+
+The rotator uses `provider/model` format. The `normalize_model_name()` function handles conversion:
+
+| Input | Output |
+|-------|--------|
+| `gpt-4o` | `openai/gpt-4o` |
+| `gemini-2.5-flash` | `gemini/gemini-2.5-flash` |
+| `claude-3-sonnet` | `anthropic/claude-3-sonnet` |
+| `openai/gpt-4o` | `openai/gpt-4o` (unchanged) |
+
+### 15.6 Discord Commands
+
+- `/settings model <name>`: Change active model (supports both `gpt-4o` and `openai/gpt-4o` formats)
+- `/settings status`: Show current model and key pool status
+- `/settings models [provider]`: List available models
+- `/settings usage`: Show API key usage statistics (requests, tokens, costs)
+
+### 15.7 Anthropic API Compatibility
+
+The rotator includes an Anthropic API compatibility layer that enables Claude clients to work through the rotator:
+
+```python
+from src.rotator_client import anthropic_messages, anthropic_count_tokens
+
+# Handle Anthropic-format requests
+response = await anthropic_messages(request)
+
+# Count tokens in Anthropic format
+token_info = await anthropic_count_tokens(request)
+```
+
+### 15.8 Usage Tracking
+
+Usage statistics are tracked in `key_usage.json` (configurable via `ROTATOR_USAGE_FILE_PATH`):
+
+```python
+from src.rotator_client import get_usage_summary, get_detailed_usage
+
+# Get usage summary
+summary = get_usage_summary()
+# Returns: total_requests, total_tokens, total_cost, by_provider, by_model
+
+# Get detailed usage with pool status
+detailed = await get_detailed_usage()
+```
+
+### 15.9 Backward Compatibility
+
+- If `ENABLE_ROTATOR=false`, falls back to legacy `LLM_API_KEY` single-key mode.
+- If no provider-specific keys found, `LLM_API_KEY` is auto-wrapped into rotator format.
+- Old model names (e.g., `gpt-4o`) are automatically normalized.
+
+### 15.10 Adding New Providers
+
+1. Add keys to `.env`: `NEWPROVIDER_API_KEY=xxx`
+2. Update `normalize_model_name()` in `rotator_client.py` if needed.
+3. Update `_get_model_spec()` in `agent.py` for PydanticAI mapping.
+
+---
+
+**Document Version:** 1.3  
+**Last Updated:** January 27, 2025  
 **Project:** Cortana Discord Bot

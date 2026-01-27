@@ -2,7 +2,7 @@
 
 # Cortana - Discord Personal Assistant
 
-Cortana is an intelligent Discord bot designed to be a personalized digital companion. She features **bionic memory** (Short-Term & Long-Term), **task management** (Todos, Calendar), **coding agent capabilities**, and a unique personality.
+Cortana is an intelligent Discord bot designed to be a personalized digital companion. She features **bionic memory** (Short-Term & Long-Term), **task management** (Todos, Calendar), **coding agent capabilities**, **resilient multi-provider LLM access**, and a unique personality.
 
 Built with **Python**, **discord.py**, and **PydanticAI**, following a "Thin Client, Fat Cloud" architecture.
 
@@ -11,9 +11,94 @@ Built with **Python**, **discord.py**, and **PydanticAI**, following a "Thin Cli
 - 🧠 **Bionic Memory**: Powered by **Zep**. Remembers facts about you across conversations.
 - ✅ **Task Management**: Manage To-Dos and Calendar events directly from Discord.
 - 📅 **Calendar Integration**: Smart scheduling with conflict detection.
-- 💬 **Natural Interaction**: Powered by LLMs (OpenAI/Anthropic) for fluid, witty conversations.
+- 💬 **Natural Interaction**: Powered by LLMs (OpenAI/Anthropic/Google) for fluid, witty conversations.
 - ☁️ **Cloud Native**: Uses **Supabase** for data persistence and **Zep** for memory vectorization.
 - 🛠️ **Coding Agent**: Execute commands, manage files, and create custom tools (skills).
+- 🔄 **API Key Rotation**: Resilient multi-key, multi-provider LLM access with automatic failover.
+
+## API Key Rotation (rotator_library)
+
+Cortana integrates [rotator_library](https://github.com/Mirrowel/LLM-API-Key-Proxy) for resilient LLM access across multiple providers and API keys.
+
+### Benefits
+
+- **High Availability**: Automatic failover when a key is exhausted or rate-limited
+- **Cost Optimization**: Distribute load across multiple keys to stay within free tiers
+- **Multi-Provider Support**: Seamlessly switch between OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen, and more
+- **Smart Key Selection**: Weighted random or deterministic selection for load balancing
+- **Escalating Cooldowns**: Failed keys are temporarily removed from rotation with increasing cooldown periods
+
+### Configuration
+
+#### Multi-Key Setup
+
+Add multiple API keys using the pattern `<PROVIDER>_API_KEY` or `<PROVIDER>_API_KEY_<N>`:
+
+```ini
+# Multiple OpenAI keys
+OPENAI_API_KEY_1=sk-xxx...
+OPENAI_API_KEY_2=sk-yyy...
+
+# Multiple Gemini keys
+GEMINI_API_KEY_1=AIza...
+GEMINI_API_KEY_2=AIza...
+
+# Single Anthropic key
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Enable the rotator (default: true)
+ENABLE_ROTATOR=true
+```
+
+#### OAuth Credentials (Advanced)
+
+For providers requiring OAuth (Gemini CLI, Qwen Code, Antigravity, iFlow):
+
+```ini
+# Gemini CLI OAuth
+GEMINI_CLI_OAUTH_CREDENTIALS=/path/to/gemini_oauth.json
+
+# Antigravity OAuth (supports Gemini 3, Claude, GPT-OSS)
+ANTIGRAVITY_OAUTH_CREDENTIALS=/path/to/antigravity_oauth.json
+```
+
+#### Rotator Tuning
+
+```ini
+# Retry settings
+ROTATOR_MAX_RETRIES=2
+ROTATOR_GLOBAL_TIMEOUT=120
+
+# Rotation strategy
+ROTATOR_ROTATION_TOLERANCE=2.0
+# 0.0 = deterministic (always pick least-used key)
+# 2.0 = weighted random (recommended, harder to fingerprint)
+# 5.0+ = high randomness
+
+# Usage tracking
+ROTATOR_USAGE_FILE_PATH=key_usage.json
+```
+
+### Discord Commands
+
+| Command | Description |
+|---------|-------------|
+| `/settings model <name>` | Change the active LLM model (e.g., `gpt-4o`, `openai/gpt-4o`, `gemini/gemini-2.5-flash`) |
+| `/settings status` | Show current model and API key pool status |
+| `/settings models [provider]` | List available models for a provider |
+
+### Backward Compatibility
+
+If you prefer the legacy single-key mode, simply set:
+
+```ini
+LLM_API_KEY=your_key
+ENABLE_ROTATOR=false
+```
+
+The rotator will also auto-wrap a single `LLM_API_KEY` if no provider-specific keys are found.
+
+---
 
 ## Coding Agent Capabilities
 
@@ -71,12 +156,14 @@ BASH_OUTPUT_MAX_BYTES=51200
 FILE_READ_MAX_LINES=1000
 ```
 
+---
+
 ## Prerequisites
 
 - Python 3.10+
 - **Supabase** Project (PostgreSQL)
 - **Zep** Account (Memory Service)
-- **OpenAI** or **Anthropic** API Key
+- **OpenAI**, **Anthropic**, or **Google** API Key(s)
 - **Discord** Bot Token
 
 ## Installation
@@ -105,9 +192,10 @@ FILE_READ_MAX_LINES=1000
    ZEP_API_KEY=...
    EXA_API_KEY=...
    
-   # LLM Configuration
-   LLM_BASE_URL=https://api.openai.com/v1
-   LLM_API_KEY=...
+   # LLM Configuration (multi-key recommended)
+   OPENAI_API_KEY_1=...
+   OPENAI_API_KEY_2=...
+   GEMINI_API_KEY_1=...
    LLM_MODEL_NAME=gpt-4o
    
    # Coding Agent (optional)
@@ -155,7 +243,7 @@ python -m src.main
 
 ### Workspace Volume (for Coding Agent)
 
-To persist workspace data (skills, files), mount a volume:
+To persist workspace data (skills, files, key usage):
 
 ```bash
 docker run -d --name cortana-bot \
@@ -171,7 +259,12 @@ services:
   cortana:
     # ... other config
     volumes:
-      - ./workspace:/workspace
+      - cortana-workspace:/workspace
+      # Optional: OAuth credentials
+      # - ./credentials:/app/credentials:ro
+
+volumes:
+  cortana-workspace:
 ```
 
 ## Project Structure
@@ -180,15 +273,17 @@ services:
 cortana-bot/
 ├── src/
 │   ├── agent.py           # PydanticAI Agent & System Prompt
-│   ├── config.py          # Env Config
+│   ├── config.py          # Env Config (with rotator key loading)
 │   ├── database.py        # Supabase Client
 │   ├── main.py            # Discord Client Entry Point
 │   ├── memory.py          # Zep Client
+│   ├── rotator_client.py  # RotatingClient Singleton & Helpers
 │   ├── skills.py          # Skills System (Pi Coding Agent)
 │   └── tools.py           # Agent Tools (Todos, Calendar, Coding)
 ├── tests/
-│   ├── test_coding_tools.py  # Coding tools tests
-│   ├── test_skills.py        # Skills system tests
+│   ├── test_coding_tools.py       # Coding tools tests
+│   ├── test_rotator_integration.py # Rotator integration tests
+│   ├── test_skills.py             # Skills system tests
 │   └── ...
 ├── workspace/             # Workspace directory (mounted volume)
 │   └── skills/            # Global skills
@@ -201,10 +296,12 @@ cortana-bot/
 
 - **Interface**: `discord.py` handles real-time events.
 - **Brain**: `PydanticAI` orchestrates the LLM and tools.
+- **LLM Access**: `rotator_library` provides resilient, multi-key API access.
 - **Memory**: `Zep` provides long-term fact extraction and session context.
 - **Storage**: `Supabase` stores structured business data.
 - **Coding**: Pi Coding Agent tools for command execution and file management.
 
 ## Credits
 
-Coding agent capabilities are inspired by and ported from [badlogic/pi-mono](https://github.com/badlogic/pi-mono)'s `mom` package ([@mariozechner/pi-mom](https://www.npmjs.com/package/@mariozechner/pi-mom)).
+- Coding agent capabilities are inspired by and ported from [badlogic/pi-mono](https://github.com/badlogic/pi-mono)'s `mom` package ([@mariozechner/pi-mom](https://www.npmjs.com/package/@mariozechner/pi-mom)).
+- API key rotation powered by [rotator_library](https://github.com/Mirrowel/LLM-API-Key-Proxy).
