@@ -5,8 +5,9 @@ import hashlib
 import secrets
 import json
 from typing import List, Optional, Dict, Any
+from abc import abstractmethod
 from .base import ProviderInterface, OAuthProviderInterface, OAuthCredentials, OAuthAuthInfo
-from ..models import Model, Provider, get_models
+from ..models import Model, ModelCost, Provider
 from ..config import config
 from .oauth import get_valid_access_token
 
@@ -55,7 +56,20 @@ class GoogleProvider(ProviderInterface):
         return config.LLM_API_KEY
 
     def get_models(self) -> List[Model]:
-        return get_models(self.id)
+        return [
+            Model(
+                id="gemini-1.5-pro",
+                name="Gemini 1.5 Pro",
+                api="google-generative-ai",
+                provider=self.id,
+                baseUrl="https://generativelanguage.googleapis.com/v1beta",
+                reasoning=False,
+                input_types=["text", "image"],
+                cost=ModelCost(input=3.5, output=10.5),
+                contextWindow=2000000,
+                maxTokens=8192
+            )
+        ]
 
 class GoogleOAuthBase(OAuthProviderInterface):
     def __init__(self, provider_id: Provider, name: str, client_id: str, client_secret: str, redirect_uri: str, scopes: List[str]):
@@ -89,8 +103,9 @@ class GoogleOAuthBase(OAuthProviderInterface):
         from .oauth import get_stored_credentials
         return await get_stored_credentials(user_id, self.id)
 
+    @abstractmethod
     def get_models(self) -> List[Model]:
-        return get_models(self.id)
+        pass
 
     async def login(self, user_id: int) -> OAuthAuthInfo:
         verifier = secrets.token_urlsafe(32)
@@ -218,6 +233,22 @@ class GoogleGeminiCLIProvider(GoogleOAuthBase):
             scopes=GEMINI_CLI_SCOPES
         )
 
+    def get_models(self) -> List[Model]:
+        return [
+            Model(
+                id="gemini-2.0-flash",
+                name="Gemini 2.0 Flash (CLI)",
+                api="google-gemini-cli",
+                provider=self.id,
+                baseUrl="https://cloudcode-pa.googleapis.com",
+                reasoning=False,
+                input_types=["text", "image"],
+                cost=ModelCost(input=0.0, output=0.0),
+                contextWindow=1000000,
+                maxTokens=8192
+            )
+        ]
+
 class GoogleAntigravityProvider(GoogleOAuthBase):
     def __init__(self):
         super().__init__(
@@ -228,3 +259,19 @@ class GoogleAntigravityProvider(GoogleOAuthBase):
             redirect_uri=ANTIGRAVITY_REDIRECT_URI,
             scopes=ANTIGRAVITY_SCOPES
         )
+
+    def get_models(self) -> List[Model]:
+        return [
+            Model(
+                id="gemini-3-alpha",
+                name="Gemini 3 Alpha (Antigravity)",
+                api="google-gemini-cli",
+                provider=self.id,
+                baseUrl="https://cloudcode-pa.googleapis.com",
+                reasoning=True,
+                input_types=["text", "image"],
+                cost=ModelCost(input=0.0, output=0.0),
+                contextWindow=2000000,
+                maxTokens=16384
+            )
+        ]

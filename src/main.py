@@ -5,9 +5,9 @@ from .config import config
 from . import agent
 from .memory import memory_client
 from .scheduler import ReminderScheduler
-from .providers import get_oauth_providers, get_provider
+from .providers import get_oauth_providers, get_provider, get_all_providers
 from .providers.base import OAuthProviderInterface
-from .models import MODELS, find_model_by_id
+from .models import find_model_by_id
 
 class SettingsGroup(app_commands.Group):
     def __init__(self):
@@ -42,9 +42,11 @@ class CortanaClient(discord.Client):
         @self.tree.command(name="models", description="List all available AI models")
         async def models(interaction: discord.Interaction):
             embed = discord.Embed(title="Available AI Models", color=discord.Color.blue())
-            for provider, provider_models in MODELS.items():
-                model_list = "\n".join([f"- `{m.id}`: {m.name}" for m in provider_models.values()])
-                embed.add_field(name=provider.capitalize(), value=model_list, inline=False)
+            for provider in get_all_providers():
+                provider_models = provider.get_models()
+                if provider_models:
+                    model_list = "\n".join([f"- `{m.id}`: {m.name}" for m in provider_models])
+                    embed.add_field(name=provider.name, value=model_list, inline=False)
             await interaction.response.send_message(embed=embed)
 
         # Add /login command

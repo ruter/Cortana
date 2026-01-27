@@ -5,7 +5,7 @@ import hashlib
 import secrets
 from typing import List, Optional, Dict, Any
 from .base import OAuthProviderInterface, OAuthCredentials, OAuthAuthInfo
-from ..models import Model, Provider, get_models
+from ..models import Model, ModelCost, Provider
 from ..config import config
 from .oauth import get_valid_access_token
 
@@ -41,7 +41,20 @@ class AnthropicProvider(OAuthProviderInterface):
         return None
 
     def get_models(self) -> List[Model]:
-        return get_models(self.id)
+        return [
+            Model(
+                id="claude-3-5-sonnet-20241022",
+                name="Claude 3.5 Sonnet",
+                api="anthropic-messages",
+                provider=self.id,
+                baseUrl="https://api.anthropic.com/v1",
+                reasoning=False,
+                input_types=["text", "image"],
+                cost=ModelCost(input=3.0, output=15.0, cacheRead=0.3, cacheWrite=3.75),
+                contextWindow=200000,
+                maxTokens=8192
+            )
+        ]
 
     async def login(self, user_id: int) -> OAuthAuthInfo:
         # Generate PKCE
