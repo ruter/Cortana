@@ -10,4 +10,5 @@ exa-py
 PyYAML
 pydantic>=2.0
 litellm
-rotator-library
+# rotator_library - install from GitHub
+rotator_library @ git+https://github.com/Mirrowel/LLM-API-Key-Proxy.git@main#subdirectory=src/rotator_library
