@@ -105,7 +105,6 @@ class Config:
     LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY"))
     LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gpt-4o")
-    ONE_BALANCE_AUTH_KEY = os.getenv("ONE_BALANCE_AUTH_KEY", "")
     EXA_API_KEY = os.getenv("EXA_API_KEY", "")
 
     # --- Rotator Library Configuration ---

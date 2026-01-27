@@ -242,37 +242,8 @@ def initialize_agent(model_name: Optional[str] = None) -> Agent:
     model_spec = _get_model_spec(model_name)
     logger.info(f"Initializing agent with model: {model_spec}")
     
-    # Check if we're using a custom Google endpoint with ONE_BALANCE
-    if config.ONE_BALANCE_AUTH_KEY and "google:" in model_spec:
-        # Use custom Google provider setup
-        try:
-            from google.genai import Client
-            from google.genai.types import HttpOptions
-            from pydantic_ai.models.google import GoogleModel
-            from pydantic_ai.providers.google import GoogleProvider
-            
-            client = Client(
-                api_key=config.LLM_API_KEY,
-                http_options=HttpOptions(
-                    base_url=config.LLM_BASE_URL,
-                    headers={"x-goog-api-key": config.ONE_BALANCE_AUTH_KEY}
-                )
-            )
-            provider = GoogleProvider(client=client)
-            _, model_id = model_spec.split(":", 1)
-            
-            agent = Agent(
-                GoogleModel(model_id, provider=provider),
-                deps_type=Dict[str, Any],
-                system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
-            )
-            logger.info("Using ONE_BALANCE Google provider")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Google provider: {e}, falling back to standard mode")
-            agent = _create_standard_agent(model_spec)
-    else:
-        # Standard agent creation with rotator support
-        agent = _create_standard_agent(model_spec)
+    # Standard agent creation with rotator support
+    agent = _create_standard_agent(model_spec)
     
     # Register all tools
     _register_agent_tools(agent)

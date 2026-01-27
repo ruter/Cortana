@@ -151,7 +151,6 @@ cortana-bot/
 - `SUPABASE_URL`, `SUPABASE_KEY`: Database credentials.
 - `ZEP_API_KEY`: Memory system API key.
 - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL_NAME`: LLM configuration.
-- `ONE_BALANCE_AUTH_KEY`: (Optional) Google API key override.
 - `EXA_API_KEY`: (Optional) Web search API key.
 - `DEFAULT_TIMEZONE`: User timezone for time calculations.
 
@@ -417,7 +416,6 @@ LLM_API_KEY=your_openai_or_anthropic_key
 ```env
 LLM_BASE_URL=https://api.openai.com/v1          # Custom endpoint
 LLM_MODEL_NAME=gpt-4o                            # Model choice
-ONE_BALANCE_AUTH_KEY=...                         # Google API override
 EXA_API_KEY=...                                  # Web search (Exa)
 DEFAULT_TIMEZONE=America/New_York                # User timezone
 LOG_LEVEL=INFO                                   # Logging level
