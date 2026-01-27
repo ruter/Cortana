@@ -10,5 +10,8 @@ exa-py
 PyYAML
 pydantic>=2.0
 litellm
+httpx
+aiofiles
+filelock
 # rotator_library - cloned separately due to packaging issues
 # See Dockerfile for installation
