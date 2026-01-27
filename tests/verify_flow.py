@@ -1,124 +1,158 @@
+"""
+Verification test for the Cortana agent flow.
+
+Tests that tools are registered correctly and system prompt is generated properly.
+"""
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 import sys
 import os
 
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Mock config before importing anything else
-with patch('src.config.Config') as MockConfig:
-    MockConfig.DISCORD_TOKEN = "mock_token"
-    MockConfig.SUPABASE_URL = "mock_url"
-    MockConfig.SUPABASE_KEY = "mock_key"
-    MockConfig.ZEP_API_URL = "mock_url"
-    MockConfig.ZEP_API_KEY = "mock_key"
-    MockConfig.OPENAI_API_KEY = "mock_key"
+# Mock external dependencies
+sys.modules['supabase'] = MagicMock()
+sys.modules['zep_cloud'] = MagicMock()
+sys.modules['zep_cloud.types'] = MagicMock()
 
-    # Mock external modules in sys.modules
-    sys.modules['supabase'] = MagicMock()
-    sys.modules['zep_python'] = MagicMock()
-    sys.modules['openai'] = MagicMock()
+# Mock config
+mock_config = MagicMock()
+mock_config.DISCORD_TOKEN = "mock_token"
+mock_config.SUPABASE_URL = "mock_url"
+mock_config.SUPABASE_KEY = "mock_key"
+mock_config.ZEP_API_KEY = "mock_key"
+mock_config.LLM_API_KEY = "mock_key"
+mock_config.LLM_MODEL_NAME = "gpt-4o"
+mock_config.LLM_BASE_URL = None
+mock_config.DEFAULT_TIMEZONE = "UTC"
+mock_config.EXA_API_KEY = None
+mock_config.ENABLE_ROTATOR = False
+mock_config.ENABLE_BASH_TOOL = False
+mock_config.ENABLE_FILE_TOOLS = False
+mock_config.ENABLE_SKILLS = False
+mock_config.ROTATOR_API_KEYS = {}
+mock_config.load_rotator_keys = MagicMock()
+mock_config.get_rotator_config = MagicMock(return_value={"api_keys": {}, "oauth_credentials": {}})
+mock_config.get_available_providers = MagicMock(return_value=[])
+mock_config.get_key_count = MagicMock(return_value=0)
+mock_config.validate = MagicMock()
+
+sys.modules['src.config'] = MagicMock()
+sys.modules['src.config'].config = mock_config
+
+
+async def run_test():
+    """Run verification tests for the agent."""
+    print("Starting Verification Test...")
     
-    # Mock PydanticAI
-    mock_pydantic_ai = MagicMock()
-    sys.modules['pydantic_ai'] = mock_pydantic_ai
-    
-    # Define Mock Agent Class to handle decoration
-    class MockAgent:
-        def __init__(self, *args, **kwargs):
-            self._function_tools = {}
-            self._system_prompts = []
-            
-        def tool(self, func):
-            # Store tool info for verification
-            mock_info = MagicMock()
-            mock_info.name = func.__name__
-            
-            mock_tool = MagicMock()
-            mock_tool.info = mock_info
-            self._function_tools[func.__name__] = mock_tool
-            return func
-            
-        def system_prompt(self, func):
-            self._system_prompts.append(MagicMock(run=func))
-            return func
-
-        async def run(self, *args, **kwargs):
-            return MagicMock(data="Mock Response")
-
-    mock_pydantic_ai.Agent = MockAgent
-    mock_pydantic_ai.RunContext = MagicMock()
-
-    # Mock dependencies
+    # Mock database and memory before importing agent
     with patch('src.database.create_client') as mock_create_client, \
-         patch('src.memory.ZepClient') as mock_zep_client:
+         patch('src.memory.AsyncZep') as mock_zep_client, \
+         patch('src.rotator_client.rotating_completion') as mock_completion:
         
-        # Setup Mock DB
         mock_db = MagicMock()
         mock_create_client.return_value = mock_db
         
-        # Setup Mock Zep
         mock_memory = MagicMock()
         mock_zep_client.return_value = mock_memory
         
-        # Import Agent (now that mocks are set)
-        from src.agent import cortana_agent
+        # Mock completion response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message = MagicMock()
+        mock_response.choices[0].message.content = "Mock response from Cortana"
+        mock_response.choices[0].message.tool_calls = None
+        mock_completion.return_value = mock_response
         
-        async def run_test():
-            print("Starting Verification Test...")
+        # Import agent after mocks are set up
+        from src.cortana_context import CortanaContext
+        from src.cortana_agent import CortanaAgent
+        from src.agent import cortana_agent, dynamic_system_prompt
+        
+        print("1. Verifying Tool Registration...")
+        
+        tools = cortana_agent.registry.get_all()
+        tool_names = [t.name for t in tools]
+        
+        expected_tools = [
+            'add_todo', 'list_todos', 'complete_todo', 
+            'add_calendar_event', 'check_calendar_availability', 
+            'search_long_term_memory', 'get_unread_emails',
+            'add_reminder', 'list_reminders', 'cancel_reminder',
+            'fetch_url'
+        ]
+        
+        for tool in expected_tools:
+            if tool in tool_names:
+                print(f"  [PASS] Tool '{tool}' registered.")
+            else:
+                print(f"  [FAIL] Tool '{tool}' NOT registered.")
+        
+        print(f"\n  Total tools registered: {len(tool_names)}")
+        
+        print("\n2. Verifying System Prompt Injection...")
+        
+        deps = {
+            "user_info": {"id": 123, "name": "TestUser"},
+            "zep_memory_context": "User likes apples."
+        }
+        
+        try:
+            ctx = CortanaContext(deps=deps)
+            prompt = await dynamic_system_prompt(ctx)
             
-            # Mock Agent Run
-            # Since we can't easily mock the OpenAI call without making real requests or deep patching PydanticAI,
-            # we will verify the tool definitions and system prompt generation.
-            
-            print("1. Verifying Tool Registration...")
-            tools = cortana_agent._function_tools
-            tool_names = [t.info.name for t in tools.values()]
-            expected_tools = [
-                'add_todo', 'list_todos', 'complete_todo', 
-                'add_calendar_event', 'check_calendar_availability', 
-                'search_long_term_memory', 'get_unread_emails'
+            checks = [
+                ("Cortana" in prompt, "Cortana identity"),
+                ("TestUser" in prompt, "User name"),
+                ("User likes apples" in prompt, "Memory context"),
+                ("Language Protocol" in prompt, "Language directive"),
+                ("Time Awareness" in prompt, "Time directive"),
             ]
             
-            for tool in expected_tools:
-                if tool in tool_names:
-                    print(f"  [PASS] Tool '{tool}' registered.")
-                else:
-                    print(f"  [FAIL] Tool '{tool}' NOT registered.")
+            for check, name in checks:
+                status = "[PASS]" if check else "[FAIL]"
+                print(f"  {status} {name} in prompt")
             
-            print("\n2. Verifying System Prompt Injection...")
-            # We can manually call the system prompt function if we can access it
-            # PydanticAI stores it in _system_prompts
+        except Exception as e:
+            print(f"  [FAIL] Error running system prompt: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print("\n3. Verifying Agent Run (with mock)...")
+        
+        try:
+            result = await cortana_agent.run("Hello!", deps=deps)
             
-            # Create a dummy context
-            from pydantic_ai import RunContext
-            
-            deps = {
-                "user_info": {"id": 123, "name": "TestUser"},
-                "zep_memory_context": "User likes apples."
-            }
-            
-            # This is a bit hacky to test the system prompt function directly
-            # but serves to verify it doesn't crash
+            if result.output == "Mock response from Cortana":
+                print("  [PASS] Agent run completed successfully")
+            else:
+                print(f"  [FAIL] Unexpected response: {result.output}")
+                
+            if result.success:
+                print("  [PASS] Result marked as successful")
+            else:
+                print("  [FAIL] Result marked as failed")
+                
+        except Exception as e:
+            print(f"  [FAIL] Error running agent: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print("\n4. Verifying Tool Schemas...")
+        
+        for tool in tools[:3]:  # Check first 3 tools
             try:
-                # Find the system prompt runner
-                sys_prompt_runner = cortana_agent._system_prompts[0]
-                # Create a mock context
-                ctx = MagicMock(spec=RunContext)
-                ctx.deps = deps
-                
-                prompt = await sys_prompt_runner.run(ctx)
-                
-                if "Cortana" in prompt and "TestUser" in prompt and "User likes apples" in prompt:
-                    print("  [PASS] System Prompt generated correctly with context.")
+                schema = tool.openai_tool()
+                if schema.get("type") == "function" and schema.get("function", {}).get("name"):
+                    print(f"  [PASS] Tool '{tool.name}' has valid OpenAI schema")
                 else:
-                    print("  [FAIL] System Prompt missing key elements.")
-                    print(f"Generated: {prompt[:100]}...")
+                    print(f"  [FAIL] Tool '{tool.name}' has invalid schema")
             except Exception as e:
-                print(f"  [FAIL] Error running system prompt: {e}")
+                print(f"  [FAIL] Tool '{tool.name}' schema error: {e}")
+        
+        print("\nVerification Complete.")
 
-            print("\nVerification Complete.")
 
-        if __name__ == "__main__":
-            asyncio.run(run_test())
+if __name__ == "__main__":
+    asyncio.run(run_test())

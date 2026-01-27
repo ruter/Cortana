@@ -2,25 +2,23 @@
 Cortana Agent Module
 ====================
 
-Defines the PydanticAI agent with dynamic system prompts, tool registration,
+Defines the CortanaAgent with dynamic system prompts, tool registration,
 and integration with the RotatingClient for resilient LLM access.
 """
 
-import os
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from pydantic_ai import Agent, RunContext
-
 from .config import config
+from .cortana_context import CortanaContext
+from .cortana_agent import CortanaAgent
 from .tools import (
     add_todo, list_todos, complete_todo,
     add_calendar_event, check_calendar_availability,
     search_long_term_memory, get_unread_emails,
     add_reminder, list_reminders, cancel_reminder,
     fetch_url, search_web_exa, get_contents_exa,
-    # Coding tools
     execute_bash, read_file, write_file, edit_file
 )
 from .skills import load_all_skills, format_skills_for_prompt
@@ -32,7 +30,6 @@ logger = logging.getLogger(__name__)
 def _get_coding_tools_prompt(user_id: str) -> str:
     """Generate the coding tools section of the system prompt."""
     
-    # Load available skills
     skills = []
     if config.ENABLE_SKILLS:
         skills = load_all_skills(config.WORKSPACE_DIR, user_id)
@@ -106,7 +103,8 @@ Scripts are in: {{baseDir}}/
 """
 
 
-async def dynamic_system_prompt(ctx: RunContext[Dict[str, Any]]) -> str:
+async def dynamic_system_prompt(ctx: CortanaContext) -> str:
+    """Generate the dynamic system prompt based on context."""
     user_info = ctx.deps.get("user_info", {})
     user_id = str(user_info.get('id', 'unknown'))
 
@@ -114,12 +112,10 @@ async def dynamic_system_prompt(ctx: RunContext[Dict[str, Any]]) -> str:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo(config.DEFAULT_TIMEZONE)
     except Exception:
-        # Fallback for systems without tzdata (Windows)
         try:
             import pytz
             tz = pytz.timezone(config.DEFAULT_TIMEZONE)
         except Exception:
-            # Final fallback to UTC
             from datetime import timezone
             tz = timezone.utc
 
@@ -127,10 +123,8 @@ async def dynamic_system_prompt(ctx: RunContext[Dict[str, Any]]) -> str:
     current_time = now.isoformat()
     day_of_week = now.strftime('%A')
 
-    # Retrieve Zep Memory Context
     zep_memory_context = ctx.deps.get("zep_memory_context", "No previous context.")
     
-    # Generate coding tools prompt section
     coding_tools_prompt = ""
     if config.ENABLE_BASH_TOOL or config.ENABLE_FILE_TOOLS or config.ENABLE_SKILLS:
         coding_tools_prompt = _get_coding_tools_prompt(user_id)
@@ -195,105 +189,38 @@ You have access to Long-Term Memory (Facts) and Short-Term Context (Recent Conve
     return prompt
 
 
-def _get_model_spec(model_name: str) -> str:
-    """
-    Convert model name to PydanticAI model specification.
-    
-    Handles both legacy format (gpt-4o) and new format (openai/gpt-4o).
-    """
-    normalized = normalize_model_name(model_name)
-    provider, model = normalized.split("/", 1)
-    
-    # Map provider names to PydanticAI prefixes
-    provider_map = {
-        "openai": "openai",
-        "gemini": "google",
-        "google": "google",
-        "anthropic": "anthropic",
-        "claude": "anthropic",
-        "groq": "groq",
-        "mistral": "mistral",
-    }
-    
-    pydantic_provider = provider_map.get(provider.lower(), "openai")
-    return f"{pydantic_provider}:{model}"
-
-
-def initialize_agent(model_name: Optional[str] = None) -> Agent:
+def initialize_agent(model_name: Optional[str] = None) -> CortanaAgent:
     """
     Initialize the Cortana agent with the specified model.
     
-    Uses RotatingClient for API key management when enabled.
-    Falls back to legacy single-key mode if rotator is disabled or unavailable.
+    Uses RotatingClient for API key management via rotator_client.
     
     Args:
         model_name: Optional model name override. Defaults to config.LLM_MODEL_NAME.
     
     Returns:
-        Configured PydanticAI Agent instance.
+        Configured CortanaAgent instance.
     """
     if model_name is None:
         model_name = config.LLM_MODEL_NAME
     
-    # Ensure rotator keys are loaded
     config.load_rotator_keys()
     
-    # Determine model specification
-    model_spec = _get_model_spec(model_name)
-    logger.info(f"Initializing agent with model: {model_spec}")
+    normalized = normalize_model_name(model_name)
+    logger.info(f"Initializing agent with model: {normalized}")
     
-    # Standard agent creation with rotator support
-    agent = _create_standard_agent(model_spec)
+    agent = CortanaAgent(model=normalized, max_steps=15)
     
-    # Register all tools
-    _register_agent_tools(agent)
-    
-    # Register dynamic system prompt
     agent.system_prompt(dynamic_system_prompt)
     
-    return agent
-
-
-def _create_standard_agent(model_spec: str) -> Agent:
-    """
-    Create a standard PydanticAI agent with rotator-compatible configuration.
-    
-    Sets up environment variables for API key access (used by PydanticAI).
-    The actual key rotation happens at the LLM call level.
-    """
-    # Configure environment for PydanticAI's model initialization
-    # PydanticAI uses these env vars internally
-    if config.ROTATOR_API_KEYS:
-        # Use first available key for initialization (rotator handles rotation)
-        for provider, keys in config.ROTATOR_API_KEYS.items():
-            if keys:
-                if provider == "openai":
-                    os.environ['OPENAI_API_KEY'] = keys[0]
-                elif provider == "anthropic":
-                    os.environ['ANTHROPIC_API_KEY'] = keys[0]
-                elif provider in ("gemini", "google"):
-                    os.environ['GOOGLE_API_KEY'] = keys[0]
-    elif config.LLM_API_KEY:
-        # Legacy single-key mode
-        os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
-    
-    # Set base URL for OpenAI-compatible endpoints
-    if config.LLM_BASE_URL and "openai:" in model_spec:
-        os.environ['OPENAI_BASE_URL'] = config.LLM_BASE_URL
-    
-    agent = Agent(
-        model_spec,
-        deps_type=Dict[str, Any],
-        system_prompt='You are Cortana, an excellently efficient and highly intelligent personal assistant.',
-    )
+    _register_agent_tools(agent)
     
     return agent
 
 
-def _register_agent_tools(agent: Agent) -> None:
+def _register_agent_tools(agent: CortanaAgent) -> None:
     """Register all tools with the agent."""
     
-    # Task Management Tools
     agent.tool(add_todo)
     agent.tool(list_todos)
     agent.tool(complete_todo)
@@ -306,12 +233,10 @@ def _register_agent_tools(agent: Agent) -> None:
     agent.tool(cancel_reminder)
     agent.tool(fetch_url)
     
-    # Web Search Tools (optional)
     if config.EXA_API_KEY:
         agent.tool(search_web_exa)
         agent.tool(get_contents_exa)
     
-    # Coding Tools (Pi Coding Agent capabilities)
     if config.ENABLE_BASH_TOOL:
         agent.tool(execute_bash)
     
@@ -327,20 +252,16 @@ def update_agent_model(model_name: str) -> None:
     """
     Update the agent to use a different model.
     
-    Supports both legacy format (gpt-4o) and provider format (openai/gpt-4o).
-    
     Args:
         model_name: The new model name to use.
     """
     global cortana_agent
     
-    # Normalize and update config
     normalized = normalize_model_name(model_name)
     config.LLM_MODEL_NAME = normalized
     
     logger.info(f"Updating agent model to: {normalized}")
     
-    # Reinitialize agent with new model
     cortana_agent = initialize_agent(normalized)
 
 
@@ -360,5 +281,4 @@ async def get_agent_status() -> Dict[str, Any]:
     }
 
 
-# Initialize the global agent instance
 cortana_agent = initialize_agent()
