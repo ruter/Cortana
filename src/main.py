@@ -328,7 +328,7 @@ class CortanaClient(discord.Client):
         try:
             async with message.channel.typing():
                 result = await agent.cortana_agent.run(message.content, deps=deps)
-                response_text = result.output if hasattr(result, 'output') else str(result)
+                response_text = result.output
                 
                 # 3. Send Response (handle long messages)
                 if len(response_text) > 2000:

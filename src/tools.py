@@ -1,13 +1,13 @@
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
-from pydantic_ai import RunContext
 import aiohttp
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
 from .database import db
 from .memory import memory_client
+from .cortana_context import CortanaContext
 
 # --- Data Models ---
 
@@ -51,7 +51,7 @@ async def ensure_user_exists(user_id: int) -> None:
 
 # --- Transaction Tools ---
 
-async def add_todo(ctx: RunContext[Dict[str, Any]], content: str, due_date: Optional[datetime] = None, priority: int = 3) -> str:
+async def add_todo(ctx: CortanaContext, content: str, due_date: Optional[datetime] = None, priority: int = 3) -> str:
     """
     Adds a new item to the user's To-Do list.
     
@@ -79,7 +79,7 @@ async def add_todo(ctx: RunContext[Dict[str, Any]], content: str, due_date: Opti
     except Exception as e:
         return f"Error adding todo: {str(e)}"
 
-async def list_todos(ctx: RunContext[Dict[str, Any]], status: str = "PENDING", limit: int = 10) -> str:
+async def list_todos(ctx: CortanaContext, status: str = "PENDING", limit: int = 10) -> str:
     """
     Lists the user's To-Do items.
     
@@ -102,7 +102,7 @@ async def list_todos(ctx: RunContext[Dict[str, Any]], status: str = "PENDING", l
     except Exception as e:
         return f"Error listing todos: {str(e)}"
 
-async def complete_todo(ctx: RunContext[Dict[str, Any]], todo_id: int) -> str:
+async def complete_todo(ctx: CortanaContext, todo_id: int) -> str:
     """
     Marks a To-Do item as completed.
     
@@ -121,7 +121,7 @@ async def complete_todo(ctx: RunContext[Dict[str, Any]], todo_id: int) -> str:
     except Exception as e:
         return f"Error completing todo: {str(e)}"
 
-async def add_calendar_event(ctx: RunContext[Dict[str, Any]], title: str, start_time: datetime, end_time: datetime, location: Optional[str] = None) -> str:
+async def add_calendar_event(ctx: CortanaContext, title: str, start_time: datetime, end_time: datetime, location: Optional[str] = None) -> str:
     """
     Adds an event to the user's calendar.
     
@@ -149,7 +149,7 @@ async def add_calendar_event(ctx: RunContext[Dict[str, Any]], title: str, start_
     except Exception as e:
         return f"Error adding event: {str(e)}"
 
-async def check_calendar_availability(ctx: RunContext[Dict[str, Any]], start_range: datetime, end_range: datetime) -> str:
+async def check_calendar_availability(ctx: CortanaContext, start_range: datetime, end_range: datetime) -> str:
     """
     Checks for conflicting events in a given time range.
     
@@ -176,7 +176,7 @@ async def check_calendar_availability(ctx: RunContext[Dict[str, Any]], start_ran
 
 # --- Information Retrieval Tools ---
 
-async def search_long_term_memory(ctx: RunContext[Dict[str, Any]], query: str, limit: int = 3) -> str:
+async def search_long_term_memory(ctx: CortanaContext, query: str, limit: int = 3) -> str:
     """
     Searches the user's long-term memory (facts) in Zep.
     
@@ -198,14 +198,14 @@ async def search_long_term_memory(ctx: RunContext[Dict[str, Any]], query: str, l
     except Exception as e:
         return f"Error searching memory: {str(e)}"
 
-async def get_unread_emails(ctx: RunContext[Dict[str, Any]], limit: int = 5) -> str:
+async def get_unread_emails(ctx: CortanaContext, limit: int = 5) -> str:
     """
     Mock function to get unread emails.
     In a real app, this would connect to Gmail/Outlook API.
     """
     return "No unread emails (Email integration not yet implemented)."
 
-async def fetch_url(ctx: RunContext[Dict[str, Any]], url: str) -> str:
+async def fetch_url(ctx: CortanaContext, url: str) -> str:
     """
     Fetches content from a URL.
     
@@ -244,7 +244,7 @@ async def fetch_url(ctx: RunContext[Dict[str, Any]], url: str) -> str:
     except Exception as e:
         return f"Error fetching URL: {str(e)}"
 
-async def search_web_exa(ctx: RunContext[Dict[str, Any]], query: str) -> str:
+async def search_web_exa(ctx: CortanaContext, query: str) -> str:
     """
     Searches the web using Exa.
     
@@ -269,7 +269,7 @@ async def search_web_exa(ctx: RunContext[Dict[str, Any]], query: str) -> str:
     except Exception as e:
         return f"Error searching with Exa: {str(e)}"
 
-async def get_contents_exa(ctx: RunContext[Dict[str, Any]], urls: List[str]) -> str:
+async def get_contents_exa(ctx: CortanaContext, urls: List[str]) -> str:
     """
     Retrieves content from specific URLs using Exa.
     
@@ -293,7 +293,7 @@ async def get_contents_exa(ctx: RunContext[Dict[str, Any]], urls: List[str]) -> 
 
 # --- Reminder Tools ---
 
-async def add_reminder(ctx: RunContext[Dict[str, Any]], message: str, remind_time: datetime, related_event_id: Optional[int] = None) -> str:
+async def add_reminder(ctx: CortanaContext, message: str, remind_time: datetime, related_event_id: Optional[int] = None) -> str:
     """
     Creates a new reminder for the user.
     
@@ -346,7 +346,7 @@ async def add_reminder(ctx: RunContext[Dict[str, Any]], message: str, remind_tim
     except Exception as e:
         return f"Error creating reminder: {str(e)}"
 
-async def list_reminders(ctx: RunContext[Dict[str, Any]], include_sent: bool = False, limit: int = 10) -> str:
+async def list_reminders(ctx: CortanaContext, include_sent: bool = False, limit: int = 10) -> str:
     """
     Lists the user's reminders.
     
@@ -380,7 +380,7 @@ async def list_reminders(ctx: RunContext[Dict[str, Any]], include_sent: bool = F
     except Exception as e:
         return f"Error listing reminders: {str(e)}"
 
-async def cancel_reminder(ctx: RunContext[Dict[str, Any]], reminder_id: int) -> str:
+async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
     """
     Cancels a pending reminder.
     
@@ -474,7 +474,7 @@ def _format_size(bytes_count: int) -> str:
         return f"{bytes_count / (1024 * 1024):.1f}MB"
 
 
-async def execute_bash(ctx: RunContext[Dict[str, Any]], command: str, timeout: Optional[int] = None) -> str:
+async def execute_bash(ctx: CortanaContext, command: str, timeout: Optional[int] = None) -> str:
     """
     Execute a bash command in the container environment.
     
@@ -535,7 +535,7 @@ async def execute_bash(ctx: RunContext[Dict[str, Any]], command: str, timeout: O
         return f"Error executing command: {str(e)}"
 
 
-async def read_file(ctx: RunContext[Dict[str, Any]], path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
+async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
     """
     Read file contents with optional line range.
     
@@ -616,7 +616,7 @@ async def read_file(ctx: RunContext[Dict[str, Any]], path: str, offset: Optional
         return f"Error reading file: {str(e)}"
 
 
-async def write_file(ctx: RunContext[Dict[str, Any]], path: str, content: str) -> str:
+async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
     """
     Create or overwrite a file with the given content.
     
@@ -654,7 +654,7 @@ async def write_file(ctx: RunContext[Dict[str, Any]], path: str, content: str) -
         return f"Error writing file: {str(e)}"
 
 
-async def edit_file(ctx: RunContext[Dict[str, Any]], path: str, old_text: str, new_text: str) -> str:
+async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str) -> str:
     """
     Make surgical edits to a file by replacing exact text matches.
     

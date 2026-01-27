@@ -122,15 +122,33 @@ async def close_rotating_client():
                 _initialization_attempted = False
 
 
-def normalize_model_name(model: str) -> str:
+def normalize_model_name(model: str, prefer_oauth: bool = False) -> str:
     """
     Normalize model name to provider/model format.
+    
+    Supports both API key providers and OAuth providers:
+    
+    API Key Providers:
+        - openai, anthropic, gemini, qwen, deepseek, meta, groq, mistral
+    
+    OAuth Providers:
+        - gemini_cli (Gemini via Google OAuth)
+        - antigravity (Gemini 3, Claude 4.5, GPT-OSS via Google internal)
+        - qwen_code (Qwen via device code flow)
+        - iflow (iFlow authorization code)
     
     Examples:
         "gpt-4o" -> "openai/gpt-4o"
         "gemini-2.5-flash" -> "gemini/gemini-2.5-flash"
         "claude-3-sonnet" -> "anthropic/claude-3-sonnet"
         "openai/gpt-4o" -> "openai/gpt-4o" (unchanged)
+        "gemini_cli/gemini-2.5-flash" -> "gemini_cli/gemini-2.5-flash" (OAuth)
+        "antigravity/claude-sonnet-4-5" -> "antigravity/claude-sonnet-4-5" (OAuth)
+    
+    Args:
+        model: Model name, optionally with provider prefix.
+        prefer_oauth: If True and no provider specified, prefer OAuth provider
+                      (e.g., gemini_cli over gemini for Gemini models).
     """
     if "/" in model:
         return model
@@ -141,18 +159,46 @@ def normalize_model_name(model: str) -> str:
     if model_lower.startswith("gpt-") or model_lower.startswith("o1") or model_lower.startswith("o3"):
         return f"openai/{model}"
     elif model_lower.startswith("gemini"):
-        return f"gemini/{model}"
+        # Use gemini_cli for OAuth, gemini for API key
+        provider = "gemini_cli" if prefer_oauth else "gemini"
+        return f"{provider}/{model}"
     elif model_lower.startswith("claude"):
         return f"anthropic/{model}"
     elif model_lower.startswith("qwen"):
-        return f"qwen/{model}"
+        # Use qwen_code for OAuth, qwen for API key
+        provider = "qwen_code" if prefer_oauth else "qwen"
+        return f"{provider}/{model}"
     elif model_lower.startswith("deepseek"):
         return f"deepseek/{model}"
     elif model_lower.startswith("llama") or model_lower.startswith("meta"):
         return f"meta/{model}"
+    elif model_lower.startswith("groq"):
+        return f"groq/{model}"
+    elif model_lower.startswith("mistral"):
+        return f"mistral/{model}"
     else:
         # Default to openai for unknown models
         return f"openai/{model}"
+
+
+# Valid OAuth provider prefixes
+OAUTH_PROVIDERS = {"gemini_cli", "antigravity", "qwen_code", "iflow"}
+
+# Valid API key provider prefixes  
+API_PROVIDERS = {"openai", "anthropic", "gemini", "google", "qwen", "deepseek", 
+                 "meta", "groq", "mistral", "nvidia", "together", "fireworks"}
+
+
+def is_oauth_provider(provider: str) -> bool:
+    """Check if a provider name is an OAuth provider."""
+    return provider.lower() in OAUTH_PROVIDERS
+
+
+def get_provider_from_model(model: str) -> str:
+    """Extract provider name from a model string."""
+    if "/" in model:
+        return model.split("/", 1)[0]
+    return normalize_model_name(model).split("/", 1)[0]
 
 
 async def rotating_completion(
