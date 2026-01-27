@@ -40,7 +40,7 @@ def _get_coding_tools_prompt(user_id: str) -> str:
     skills_section = format_skills_for_prompt(skills)
     
     return f"""
-## 6. Coding Tools (Pi Coding Agent Capabilities)
+## 7. Coding Tools (Pi Coding Agent Capabilities)
 
 You have access to powerful coding tools that allow you to execute commands, read/write files, and create custom tools.
 
@@ -179,7 +179,18 @@ You have access to Long-Term Memory (Facts) and Short-Term Context (Recent Conve
 - **Clarification:** If a user's request is ambiguous, ask specifically for the missing details before calling a tool.
 - **Confirmation:** After successfully executing a tool, confirm the action concisely.
 
-## 5. Response Guidelines (Discord Style)
+## 5. LLM Model Support
+Available LLM providers and models:
+- **API Key Providers:** OpenAI (gpt-4o, gpt-4-turbo), Anthropic (claude-3-opus, claude-3-sonnet), Google (gemini-pro)
+- **OAuth Providers** (auto-token refresh enabled):
+  - **Gemini CLI** (Google): Use format `gemini_cli/model-name` (Google OAuth 2.0)
+  - **Qwen Code** (Alibaba): Use format `qwen_code/model-name` (Alibaba Cloud OAuth)
+  - **Antigravity**: Use format `antigravity/model-name` (Custom OAuth endpoint)
+  - **iFlow**: Use format `iflow/model-name` (Workflow OAuth)
+
+For OAuth providers: Tokens are automatically refreshed before expiry. Check status with `/settings oauth-status`.
+
+## 6. Response Guidelines (Discord Style)
 - **Format:** Use Discord Markdown effectively. Use **bold** for key details (times, task names), and `code blocks` for technical data if needed.
 - **Tone:** Efficient but personable.
   - *Standard:* "Meeting added." -> *Cortana:* "I've secured that slot for you. Try not to be late."
@@ -199,10 +210,29 @@ def _get_model_spec(model_name: str) -> str:
     """
     Convert model name to PydanticAI model specification.
     
-    Handles both legacy format (gpt-4o) and new format (openai/gpt-4o).
+    Handles:
+    - Legacy format: gpt-4o → openai/gpt-4o
+    - Standard format: openai/gpt-4o → openai/gpt-4o
+    - OAuth providers: gemini_cli/model → google/model (with OAuth token)
+    
+    OAuth providers use the rotator_library with OAuth credentials from environment.
     """
     normalized = normalize_model_name(model_name)
     provider, model = normalized.split("/", 1)
+    
+    # OAuth providers that need token setup
+    oauth_providers = {
+        "gemini_cli": "google",       # Google OAuth 2.0
+        "qwen_code": "qwen",          # Alibaba Cloud
+        "antigravity": "antigravity", # Custom OAuth
+        "iflow": "iflow",             # Workflow OAuth
+    }
+    
+    # If it's an OAuth provider, map to the base provider for PydanticAI
+    if provider in oauth_providers:
+        base_provider = oauth_providers[provider]
+        logger.info(f"OAuth provider detected: {provider} → using {base_provider} for PydanticAI")
+        return f"{base_provider}/{model}"
     
     # Map provider names to PydanticAI prefixes
     provider_map = {
@@ -258,9 +288,33 @@ def _create_standard_agent(model_spec: str) -> Agent:
     """
     Create a standard PydanticAI agent with rotator-compatible configuration.
     
-    Sets up environment variables for API key access (used by PydanticAI).
-    The actual key rotation happens at the LLM call level.
+    Sets up environment variables for API key access and OAuth tokens.
+    The actual key rotation happens at the LLM call level via rotator_client.
     """
+    # Import OAuth handler for token setup
+    try:
+        from .oauth_handler import get_oauth_handler
+        import asyncio
+        
+        # Load OAuth tokens synchronously for agent initialization
+        # This is a workaround since _create_standard_agent is sync but OAuth is async
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, schedule the coroutine
+                task = asyncio.ensure_future(_setup_oauth_in_agent())
+                logger.debug("OAuth setup scheduled for async context")
+            else:
+                # Sync context, run the coroutine
+                asyncio.run(_setup_oauth_in_agent())
+        except RuntimeError:
+            # No event loop, create one
+            asyncio.run(_setup_oauth_in_agent())
+    except ImportError:
+        logger.debug("OAuth handler not available for agent initialization")
+    except Exception as e:
+        logger.warning(f"OAuth setup failed during agent initialization: {e}")
+    
     # Configure environment for PydanticAI's model initialization
     # PydanticAI uses these env vars internally
     if config.ROTATOR_API_KEYS:
@@ -273,6 +327,8 @@ def _create_standard_agent(model_spec: str) -> Agent:
                     os.environ['ANTHROPIC_API_KEY'] = keys[0]
                 elif provider in ("gemini", "google"):
                     os.environ['GOOGLE_API_KEY'] = keys[0]
+                elif provider == "qwen":
+                    os.environ['QWEN_API_KEY'] = keys[0]
     elif config.LLM_API_KEY:
         # Legacy single-key mode
         os.environ['OPENAI_API_KEY'] = config.LLM_API_KEY
@@ -288,6 +344,34 @@ def _create_standard_agent(model_spec: str) -> Agent:
     )
     
     return agent
+
+
+async def _setup_oauth_in_agent() -> None:
+    """
+    Setup OAuth tokens in environment for agent use.
+    
+    This is called during agent initialization to ensure OAuth credentials
+    are available in the environment when PydanticAI makes LLM calls.
+    """
+    try:
+        from .oauth_handler import get_oauth_handler
+        
+        oauth_handler = await get_oauth_handler()
+        
+        # Get available OAuth providers
+        for provider in oauth_handler.get_available_providers():
+            try:
+                # Get first credential for each provider
+                token = await oauth_handler.get_token(provider, credential_index=0)
+                if token:
+                    # Set environment variable with OAuth token
+                    env_var = f"{provider.upper()}_ACCESS_TOKEN"
+                    os.environ[env_var] = token
+                    logger.debug(f"OAuth token set in environment for {provider}")
+            except Exception as e:
+                logger.warning(f"Failed to setup OAuth token for {provider}: {e}")
+    except Exception as e:
+        logger.warning(f"OAuth handler not available: {e}")
 
 
 def _register_agent_tools(agent: Agent) -> None:
