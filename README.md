@@ -317,6 +317,38 @@ volumes:
   cortana-workspace:
 ```
 
+## Prompt System
+
+Cortana uses a modular, file-based prompt system that allows for dynamic personality and context management. All prompt files are located in the workspace directory (`WORKSPACE_DIR`).
+
+### Prompt Files
+
+| File | Type | Description |
+|------|------|-------------|
+| `IDENTITY.md` | Read-Only | Core role, mission, language protocol, immutable constraints |
+| `SOUL.md` | **Read/Write** | Personality traits, humor style, tone guidelines. Cortana can update this to evolve |
+| `USER.md` | **Read/Write** | User profile, preferences, learned context. Cortana updates this with new learnings |
+| `TOOLS.md` | Read-Only | Tool usage policies, time awareness rules, reminder guidelines |
+
+### Self-Evolution
+
+Cortana can modify `SOUL.md` and `USER.md` using the `edit_file` tool, enabling:
+
+- **Personality Evolution**: Adjusting tone, humor style, or expression patterns based on feedback
+- **Context Learning**: Recording user preferences and facts for better personalization
+
+### Setup
+
+Copy the prompt files to your workspace directory:
+
+```bash
+cp IDENTITY.md SOUL.md USER.md TOOLS.md /path/to/workspace/
+```
+
+Or in Docker, mount them as part of the workspace volume.
+
+---
+
 ## Project Structure
 
 ```
@@ -336,7 +368,15 @@ cortana-bot/
 │   ├── test_skills.py             # Skills system tests
 │   └── ...
 ├── workspace/             # Workspace directory (mounted volume)
-│   └── skills/            # Global skills
+│   ├── skills/            # Global skills
+│   ├── IDENTITY.md        # Core identity (read-only)
+│   ├── SOUL.md            # Personality (read/write)
+│   ├── USER.md            # User context (read/write)
+│   └── TOOLS.md           # Tool policies (read-only)
+├── IDENTITY.md            # Default prompt files (copy to workspace)
+├── SOUL.md
+├── USER.md
+├── TOOLS.md
 ├── schema.sql             # Database Schema
 ├── requirements.txt       # Python Dependencies
 └── README.md              # Documentation
