@@ -93,8 +93,14 @@ async def dynamic_system_prompt(ctx: CortanaContext) -> str:
     soul_content = read_prompt_file("SOUL.md")
     user_content = read_prompt_file("USER.md")
     tools_content = read_prompt_file("TOOLS.md")
+    
+    workspace_dir = config.WORKSPACE_DIR
 
+    soul_content = soul_content.replace("{WORKSPACE_DIR}", workspace_dir)
+    
     user_content = user_content.replace(
+        "{WORKSPACE_DIR}", workspace_dir
+    ).replace(
         "- **Name:** (Loaded from context)",
         f"- **Name:** {user_info.get('name', 'Unknown')}"
     ).replace(

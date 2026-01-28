@@ -25,4 +25,10 @@
 
 ---
 
-*Update Permission: I am permitted to edit this file to record user preferences, context, and learnings that help me provide better personalized assistance.*
+## Update Permission
+
+I am permitted to edit this file to record user preferences, context, and learnings that help me provide better personalized assistance.
+
+**File Location:** `{WORKSPACE_DIR}/USER.md`
+
+Use the `edit_file` tool to make updates.
