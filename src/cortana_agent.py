@@ -162,6 +162,27 @@ class CortanaAgent:
                     steps=step + 1,
                 )
             
+            # Handle error response (dict without choices)
+            if isinstance(response, dict):
+                error_msg = response.get("error", {}).get("message", "Unknown API error")
+                logger.error(f"API returned error response: {error_msg}")
+                return AgentResult(
+                    output=f"I hit a snag with the AI service: {error_msg}",
+                    success=False,
+                    tool_calls=tool_calls_made,
+                    steps=step + 1,
+                )
+            
+            # Validate response has choices
+            if not hasattr(response, "choices") or not response.choices:
+                logger.error("API response missing choices")
+                return AgentResult(
+                    output="I received an unexpected response from the AI service. Let's try again in a moment.",
+                    success=False,
+                    tool_calls=tool_calls_made,
+                    steps=step + 1,
+                )
+            
             # Extract message from response
             msg = response.choices[0].message
             
