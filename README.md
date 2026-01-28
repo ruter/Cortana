@@ -15,6 +15,7 @@ Built with **Python**, **discord.py**, and **PydanticAI**, following a "Thin Cli
 - ☁️ **Cloud Native**: Uses **Supabase** for data persistence and **Zep** for memory vectorization.
 - 🛠️ **Coding Agent**: Execute commands, manage files, and create custom tools (skills).
 - 🔄 **API Key Rotation**: Resilient multi-key, multi-provider LLM access with automatic failover.
+- 🔒 **Master User Access**: Secure access control - only the designated master user can interact with Cortana via DM.
 
 ## API Key Rotation (rotator_library)
 
@@ -158,6 +159,50 @@ FILE_READ_MAX_LINES=1000
 
 ---
 
+## Access Control
+
+Cortana implements strict access control to ensure only the designated master user can interact with the bot.
+
+### Access Restrictions
+
+- **🔒 Master User Only**: Only the user specified by `MASTER_USER_ID` can interact with Cortana
+- **📩 DM Only**: Cortana only responds to Direct Messages (DM). All channel interactions are blocked:
+  - Regular messages in channels are ignored
+  - Slash commands (`/settings`, etc.) cannot be used in channels
+  - Only DM interactions are permitted
+
+### Required Configuration
+
+The `MASTER_USER_ID` environment variable is **required** for the bot to start. If not configured, the bot will fail to initialize with an error message.
+
+### How to Get Your Discord User ID
+
+1. Enable **Developer Mode** in Discord:
+   - Go to **Settings** → **Advanced**
+   - Toggle **Developer Mode** on
+   
+2. Copy your User ID:
+   - Right-click on your Discord profile
+   - Select **Copy User ID**
+
+3. Set the environment variable:
+   ```ini
+   MASTER_USER_ID=123456789012345678
+   ```
+
+### Behavior Summary
+
+| Scenario | Behavior |
+|----------|----------|
+| Master user sends DM to bot | ✅ Responds normally |
+| Non-master user sends DM to bot | ❌ Ignores message |
+| Any message in a channel | ❌ Ignored (even from master user) |
+| Slash command in a channel | ❌ Blocked with error message |
+| Slash command in DM (master user) | ✅ Executes normally |
+| Slash command in DM (non-master) | ❌ Unauthorized error |
+
+---
+
 ## Prerequisites
 
 - Python 3.10+
@@ -165,6 +210,7 @@ FILE_READ_MAX_LINES=1000
 - **Zep** Account (Memory Service)
 - **OpenAI**, **Anthropic**, or **Google** API Key(s)
 - **Discord** Bot Token
+- **Discord** User ID (for master user access control)
 
 ## Installation
 
@@ -191,6 +237,10 @@ FILE_READ_MAX_LINES=1000
    SUPABASE_KEY=...
    ZEP_API_KEY=...
    EXA_API_KEY=...
+   
+   # Master User ID (Required)
+   # Get your Discord User ID: Settings → Advanced → Enable Developer Mode → Right-click your profile → Copy User ID
+   MASTER_USER_ID=123456789012345678
    
    # LLM Configuration (multi-key recommended)
    OPENAI_API_KEY_1=...

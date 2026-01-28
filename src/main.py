@@ -34,10 +34,32 @@ class SettingsGroup(app_commands.Group):
     def __init__(self):
         super().__init__(name="settings", description="Cortana settings")
 
+    async def _check_permissions(self, interaction: discord.Interaction) -> bool:
+        """
+        Check if the user has permission to use the command.
+        Returns True if check passed, False if failed (and error message was sent).
+        """
+        # Only allow DM channels (prohibit all channel interactions)
+        if not isinstance(interaction.channel, discord.DMChannel):
+            await interaction.response.send_message("❌ This command can only be used in DM.", ephemeral=True)
+            return False
+        
+        # Only allow master user (MASTER_USER_ID is guaranteed to be set by config.validate())
+        assert config.MASTER_USER_ID is not None, "MASTER_USER_ID must be set"
+        if interaction.user.id != int(config.MASTER_USER_ID):
+            await interaction.response.send_message("❌ You are not authorized to use this command.", ephemeral=True)
+            return False
+        
+        return True
+
     @app_commands.command(name="model", description="Change the LLM model (e.g. gpt-4o, openai/gpt-4o, gemini/gemini-2.5-flash)")
     @app_commands.describe(model_name="The name of the model to use (format: provider/model or just model)")
     async def model(self, interaction: discord.Interaction, model_name: str):
         """Change the active LLM model."""
+        # Access Control
+        if not await self._check_permissions(interaction):
+            return
+        
         try:
             # Normalize the model name
             normalized = normalize_model_name(model_name)
@@ -55,6 +77,10 @@ class SettingsGroup(app_commands.Group):
     @app_commands.command(name="status", description="Show current model and API key pool status")
     async def status(self, interaction: discord.Interaction):
         """Display current agent and rotator status."""
+        # Access Control
+        if not await self._check_permissions(interaction):
+            return
+        
         try:
             status = await agent.get_agent_status()
             
@@ -98,6 +124,10 @@ class SettingsGroup(app_commands.Group):
     @app_commands.describe(provider="Provider name (e.g. openai, gemini, anthropic)")
     async def models(self, interaction: discord.Interaction, provider: str = None):
         """List available models from the rotator."""
+        # Access Control
+        if not await self._check_permissions(interaction):
+            return
+        
         await interaction.response.defer()  # May take a moment to fetch
         
         try:
@@ -147,6 +177,10 @@ class SettingsGroup(app_commands.Group):
     @app_commands.command(name="usage", description="Show API key usage statistics")
     async def usage(self, interaction: discord.Interaction):
         """Display API key usage statistics."""
+        # Access Control
+        if not await self._check_permissions(interaction):
+            return
+        
         try:
             usage = get_usage_summary()
             
@@ -271,9 +305,16 @@ class CortanaClient(discord.Client):
         if message.author.id == self.user.id:
             return
 
-        # Optional: Only respond to mentions or specific channels
-        # if not self.user.mentioned_in(message):
-        #     return
+        # Access Control: Only allow DM channels (prohibit all channel interactions)
+        if not isinstance(message.channel, discord.DMChannel):
+            logger.debug(f"Ignoring message from non-DM channel: {message.channel.name} ({message.channel.type})")
+            return
+
+        # Access Control: Only allow master user (MASTER_USER_ID is guaranteed to be set by config.validate())
+        assert config.MASTER_USER_ID is not None, "MASTER_USER_ID must be set"
+        if message.author.id != int(config.MASTER_USER_ID):
+            logger.debug(f"Ignoring message from non-master user: {message.author.id}")
+            return
 
         logger.debug(f"Message from {message.author}: {message.content[:100]}...")
 

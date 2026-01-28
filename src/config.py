@@ -137,6 +137,9 @@ class Config:
     DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "UTC")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     
+    # Access Control
+    MASTER_USER_ID = os.getenv("MASTER_USER_ID")
+    
     # --- Coding Agent Configuration ---
     # Ported from badlogic/pi-mono mom package
     
@@ -208,6 +211,7 @@ class Config:
         if not cls.SUPABASE_URL: missing.append("SUPABASE_URL")
         if not cls.SUPABASE_KEY: missing.append("SUPABASE_KEY")
         if not cls.ZEP_API_KEY: missing.append("ZEP_API_KEY")
+        if not cls.MASTER_USER_ID: missing.append("MASTER_USER_ID")
         
         # Load rotator keys before validation
         cls.load_rotator_keys()
@@ -218,6 +222,12 @@ class Config:
 
         if missing:
             raise ValueError(f"Missing environment variables: {', '.join(missing)}")
+        
+        # Validate MASTER_USER_ID is a valid integer
+        try:
+            int(cls.MASTER_USER_ID)
+        except (ValueError, TypeError):
+            raise ValueError("MASTER_USER_ID must be a valid Discord user ID (integer)")
 
     @classmethod
     def get_available_providers(cls) -> List[str]:
