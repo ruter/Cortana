@@ -468,22 +468,22 @@ class ConversationCache:
         Returns:
             Summary string.
         """
-        prompt = """请将以下对话历史压缩为简洁摘要，保留：
-1. 用户的关键需求和偏好
-2. 重要的任务上下文和进行中的事项
-3. 关键决策、结论和承诺
-4. 相关的事实信息（如日期、时间、名称等）
+        prompt = """Summarize the following conversation history into a concise summary, preserving:
+1. User's key needs and preferences
+2. Important task context and ongoing items
+3. Key decisions, conclusions, and commitments
+4. Relevant factual information (dates, times, names, etc.)
 
-请用简洁的要点形式输出，保持信息密度最大化。
+Output as concise bullet points, maximizing information density.
 
-对话历史：
+Conversation history:
 """
         
         try:
             response = await rotating_completion(
                 model=normalize_model_name(model),
                 messages=[
-                    {"role": "system", "content": "你是一个对话摘要助手，负责提取和压缩对话中的关键信息。"},
+                    {"role": "system", "content": "You are a conversation summarization assistant. Extract and compress key information from conversations."},
                     {"role": "user", "content": prompt + conversation_text}
                 ],
                 max_tokens=1000,
