@@ -257,21 +257,31 @@ class ConversationCache:
             return None
         return self.persistence_dir / f"conversation_{user_id}.jsonl"
     
+    def _sync_load(self, path: Path) -> Optional[Dict[str, Any]]:
+        """Synchronous load for executor."""
+        if not path.exists():
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
     async def _load_from_file(self, user_id: str) -> Optional[ConversationState]:
         """Load conversation state from file if exists."""
         path = self._get_persistence_path(user_id)
-        if not path or not path.exists():
+        if not path:
             return None
         
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            loop = asyncio.get_running_loop()
+            data = await loop.run_in_executor(None, self._sync_load, path)
+
+            if not data:
+                return None
             
             state = ConversationState.from_json(data)
             
             # Check if loaded state is expired
             if state.is_expired():
-                path.unlink(missing_ok=True)
+                await self._delete_file(user_id)
                 return None
             
             logger.debug(f"Loaded conversation state from file for user {user_id}")
@@ -281,6 +291,11 @@ class ConversationCache:
             logger.warning(f"Failed to load conversation from file: {e}")
             return None
     
+    def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
+        """Synchronous save for executor."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
     async def _save_to_file(self, state: ConversationState) -> None:
         """Save conversation state to file."""
         path = self._get_persistence_path(state.user_id)
@@ -288,18 +303,24 @@ class ConversationCache:
             return
         
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state.to_json(), f, ensure_ascii=False, indent=2)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
             logger.debug(f"Saved conversation state to file for user {state.user_id}")
         except Exception as e:
             logger.warning(f"Failed to save conversation to file: {e}")
     
+    def _sync_delete(self, path: Path) -> None:
+        """Synchronous delete for executor."""
+        if path.exists():
+            path.unlink()
+
     async def _delete_file(self, user_id: str) -> None:
         """Delete the persistence file for a user."""
         path = self._get_persistence_path(user_id)
-        if path and path.exists():
+        if path:
             try:
-                path.unlink()
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._sync_delete, path)
                 logger.debug(f"Deleted conversation file for user {user_id}")
             except Exception as e:
                 logger.warning(f"Failed to delete conversation file: {e}")
