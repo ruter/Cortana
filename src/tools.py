@@ -253,12 +253,11 @@ async def search_web_exa(ctx: CortanaContext, query: str) -> str:
     """
     try:
         exa = Exa(api_key=config.EXA_API_KEY)
-        response = exa.search_and_contents(
+        response = exa.search(
             query,
-            type="neural",
-            use_autoprompt=True,
+            type="auto",
             num_results=3,
-            text=True
+            contents={"text": True}
         )
         
         result = f"Search results for '{query}':\\n\\n"
