@@ -15,6 +15,7 @@ Built with **Python**, **discord.py**, and **PydanticAI**, following a "Thin Cli
 - ☁️ **Cloud Native**: Uses **Supabase** for data persistence and **Zep** for memory vectorization.
 - 🛠️ **Coding Agent**: Execute commands, manage files, and create custom tools (skills).
 - 🔄 **API Key Rotation**: Resilient multi-key, multi-provider LLM access with automatic failover.
+- 💬 **Conversation Cache**: In-memory conversation history with TTL-based expiration and auto-compaction.
 - 🔒 **Master User Access**: Secure access control - only the designated master user can interact with Cortana via DM.
 
 ## API Key Rotation (rotator_library)
@@ -98,6 +99,46 @@ ENABLE_ROTATOR=false
 ```
 
 The rotator will also auto-wrap a single `LLM_API_KEY` if no provider-specific keys are found.
+
+---
+
+## Conversation Cache
+
+Cortana maintains an in-memory conversation cache that preserves context across messages within a session. This ensures continuity in conversations without losing important context.
+
+### Features
+
+- **TTL-based Expiration**: Conversations automatically expire after a period of inactivity (default: 30 minutes). Each interaction resets the timer (sliding window TTL).
+- **Auto-Compaction**: When the conversation approaches the model's context limit (80% by default), older messages are summarized by the LLM and the conversation is compacted.
+- **Crash Recovery**: Conversation state is persisted to disk for recovery after restarts.
+- **Model-Aware**: Uses `litellm` to dynamically fetch context limits for any model.
+
+### Configuration
+
+```ini
+# Time-to-live for conversations (seconds, default: 1800 = 30 minutes)
+CONVERSATION_TTL_SECONDS=1800
+
+# Token threshold for compaction (fraction of model context limit, default: 0.8)
+CONVERSATION_TOKEN_THRESHOLD=0.8
+
+# Number of recent message pairs to keep after compaction (default: 3)
+CONVERSATION_KEEP_RECENT=3
+```
+
+### How It Works
+
+1. **Normal Flow**: Messages are cached and sent as conversation history to the LLM.
+2. **TTL Expiration**: After 30 minutes of inactivity, the conversation is cleared (fresh start).
+3. **Compaction Trigger**: When token count exceeds 80% of the model's context limit:
+   - Old messages are summarized by the LLM
+   - Only the last 3 message pairs are retained
+   - The summary is prepended to future requests
+   - TTL is reset
+
+### Persistence
+
+Conversation state is saved to `{WORKSPACE_DIR}/.conversation_cache/` as JSON files. This allows recovery after bot restarts.
 
 ---
 
@@ -360,12 +401,14 @@ cortana-bot/
 │   ├── main.py            # Discord Client Entry Point
 │   ├── memory.py          # Zep Client
 │   ├── rotator_client.py  # RotatingClient Singleton & Helpers
+│   ├── conversation_cache.py # In-memory conversation cache with TTL
 │   ├── skills.py          # Skills System (Pi Coding Agent)
 │   └── tools.py           # Agent Tools (Todos, Calendar, Coding)
 ├── tests/
 │   ├── test_coding_tools.py       # Coding tools tests
 │   ├── test_rotator_integration.py # Rotator integration tests
 │   ├── test_skills.py             # Skills system tests
+│   ├── test_conversation_cache.py # Conversation cache tests
 │   └── ...
 ├── workspace/             # Workspace directory (mounted volume)
 │   ├── skills/            # Global skills
