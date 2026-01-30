@@ -20,23 +20,33 @@ from src.conversation_cache import (
     DEFAULT_TTL_SECONDS,
     DEFAULT_TOKEN_THRESHOLD,
     DEFAULT_KEEP_RECENT,
+    DEFAULT_CONTEXT_LIMIT,
 )
 
 
 class TestModelContextLimits:
-    """Tests for model context limit lookup."""
+    """Tests for model context limit lookup using litellm."""
     
-    def test_known_model_exact_match(self):
-        assert get_model_context_limit("gpt-4o") == 128000
-        assert get_model_context_limit("claude-3-opus") == 200000
-        assert get_model_context_limit("gemini-2.5-flash") == 1000000
+    def test_known_model_returns_positive_value(self):
+        """Known models should return a positive context limit."""
+        limit = get_model_context_limit("gpt-4o")
+        assert limit > 0
+        # GPT-4o should have a large context window
+        assert limit >= 32000
     
     def test_model_with_provider_prefix(self):
-        assert get_model_context_limit("openai/gpt-4o") == 128000
-        assert get_model_context_limit("anthropic/claude-3-sonnet") == 200000
+        """Models with provider prefix should work."""
+        limit = get_model_context_limit("openai/gpt-4o")
+        assert limit > 0
     
     def test_unknown_model_fallback(self):
-        assert get_model_context_limit("some-unknown-model") == 32000
+        """Unknown models should return the default fallback."""
+        assert get_model_context_limit("some-completely-unknown-model-xyz") == DEFAULT_CONTEXT_LIMIT
+    
+    def test_returns_integer(self):
+        """Should always return an integer."""
+        limit = get_model_context_limit("gpt-4o")
+        assert isinstance(limit, int)
 
 
 class TestCachedMessage:

@@ -32,46 +32,16 @@ DEFAULT_TTL_SECONDS = 1800  # 30 minutes
 DEFAULT_TOKEN_THRESHOLD = 0.8  # 80% of model limit
 DEFAULT_KEEP_RECENT = 3  # Keep last N message pairs after compact
 
-
-# Model context window limits (conservative estimates)
-MODEL_CONTEXT_LIMITS: Dict[str, int] = {
-    # OpenAI
-    "gpt-4o": 128000,
-    "gpt-4o-mini": 128000,
-    "gpt-4-turbo": 128000,
-    "gpt-4": 8192,
-    "gpt-3.5-turbo": 16385,
-    "o1": 200000,
-    "o1-mini": 128000,
-    "o3": 200000,
-    "o3-mini": 200000,
-    # Anthropic
-    "claude-3-opus": 200000,
-    "claude-3-sonnet": 200000,
-    "claude-3-haiku": 200000,
-    "claude-3-5-sonnet": 200000,
-    "claude-sonnet-4": 200000,
-    # Google
-    "gemini-2.0-flash": 1000000,
-    "gemini-2.5-flash": 1000000,
-    "gemini-2.5-pro": 2000000,
-    "gemini-1.5-pro": 2000000,
-    "gemini-1.5-flash": 1000000,
-    # DeepSeek
-    "deepseek-chat": 64000,
-    "deepseek-coder": 64000,
-    # Qwen
-    "qwen-turbo": 128000,
-    "qwen-plus": 128000,
-    "qwen-max": 32000,
-    # Default fallback
-    "default": 32000,
-}
+# Default fallback context limit when model info is unavailable
+DEFAULT_CONTEXT_LIMIT = 32000
 
 
 def get_model_context_limit(model: str) -> int:
     """
-    Get the context window limit for a model.
+    Get the context window limit for a model using litellm.
+    
+    Uses litellm's model_cost dictionary which contains max_input_tokens
+    for all supported models. Falls back to get_max_tokens() if needed.
     
     Args:
         model: Model name (with or without provider prefix).
@@ -79,19 +49,39 @@ def get_model_context_limit(model: str) -> int:
     Returns:
         Context window size in tokens.
     """
-    # Remove provider prefix if present
-    model_name = model.split("/")[-1].lower() if "/" in model else model.lower()
+    # Normalize model name - remove provider prefix for litellm lookup
+    model_name = model.split("/")[-1] if "/" in model else model
     
-    # Try exact match first
-    if model_name in MODEL_CONTEXT_LIMITS:
-        return MODEL_CONTEXT_LIMITS[model_name]
+    try:
+        import litellm
+        
+        # Try litellm.model_cost first (contains max_input_tokens)
+        if hasattr(litellm, 'model_cost') and litellm.model_cost:
+            # Try exact match
+            if model_name in litellm.model_cost:
+                info = litellm.model_cost[model_name]
+                # Prefer max_input_tokens, fall back to max_tokens
+                return info.get("max_input_tokens") or info.get("max_tokens") or DEFAULT_CONTEXT_LIMIT
+            
+            # Try with provider prefix (e.g., "openai/gpt-4o")
+            if model in litellm.model_cost:
+                info = litellm.model_cost[model]
+                return info.get("max_input_tokens") or info.get("max_tokens") or DEFAULT_CONTEXT_LIMIT
+        
+        # Fallback to get_max_tokens function
+        try:
+            max_tokens = litellm.get_max_tokens(model_name)
+            if max_tokens and max_tokens > 0:
+                return max_tokens
+        except Exception:
+            pass
+        
+    except ImportError:
+        logger.debug("litellm not available, using default context limit")
+    except Exception as e:
+        logger.debug(f"Error getting model context limit from litellm: {e}")
     
-    # Try prefix matching
-    for key, limit in MODEL_CONTEXT_LIMITS.items():
-        if model_name.startswith(key.split("-")[0]):
-            return limit
-    
-    return MODEL_CONTEXT_LIMITS["default"]
+    return DEFAULT_CONTEXT_LIMIT
 
 
 @dataclass
