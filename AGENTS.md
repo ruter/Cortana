@@ -72,6 +72,7 @@ cortana-bot/
 │   ├── rotator_client.py    # RotatingClient singleton for LLM key rotation
 │   ├── scheduler.py         # Background reminder scheduler
 │   ├── skills.py            # Skills system (Pi Coding Agent)
+│   ├── conversation_cache.py # In-memory conversation cache with TTL
 │   └── tools.py             # Agent tools (CRUD, search, coding, etc.)
 │
 ├── tests/
@@ -81,6 +82,7 @@ cortana-bot/
 │   ├── test_exa.py                # Web search functionality tests
 │   ├── test_fetch.py              # URL fetching tests
 │   ├── test_reminders.py          # Reminder scheduling tests
+│   ├── test_conversation_cache.py # Conversation cache tests
 │   └── verify_flow.py             # End-to-end flow verification
 │
 ├── workspace/               # Workspace directory (mounted volume)
@@ -183,7 +185,43 @@ memory_client = AsyncZep(api_key=config.ZEP_API_KEY)
 - `memory_client.thread.get_user_context(thread_id)`: Retrieve memory context.
 - `memory_client.thread.add_messages(thread_id, messages)`: Save messages to memory.
 
-### 3.6 `scheduler.py` - Background Reminder Scheduler
+### 3.6 `conversation_cache.py` - Conversation History Cache
+
+**Responsibility:** In-memory conversation caching with TTL-based expiration and automatic compaction.
+
+**Key Classes:**
+- `CachedMessage`: Single message with role, content, timestamp, and token count.
+- `ConversationState`: Full conversation state including messages, compact summary, and TTL.
+- `ConversationCache`: Main cache manager with thread-safe async operations.
+
+**Key Features:**
+- **TTL Expiration:** Conversations automatically expire after inactivity (default: 30 min).
+- **Sliding Window TTL:** Each interaction resets the expiration timer.
+- **Token Threshold Compaction:** When approaching model context limit (default: 80%), triggers LLM-powered summarization.
+- **File Persistence:** Optionally saves to `{WORKSPACE_DIR}/.conversation_cache/` for crash recovery.
+
+**Key Functions:**
+- `get_conversation_cache()`: Get singleton cache instance.
+- `cache.add_message(user_id, role, content)`: Add message to cache.
+- `cache.get_history(user_id, model)`: Get history (triggers compaction if needed).
+- `cache.clear(user_id)`: Clear conversation for user.
+- `cache.cleanup_expired()`: Remove all expired conversations.
+
+**Configuration (Environment Variables):**
+```env
+CONVERSATION_TTL_SECONDS=1800      # 30 minutes
+CONVERSATION_TOKEN_THRESHOLD=0.8  # 80% of model limit
+CONVERSATION_KEEP_RECENT=3        # Keep 3 message pairs after compact
+```
+
+**Compaction Flow:**
+1. Token count exceeds threshold (e.g., 80% of 128K for GPT-4o)
+2. Old messages are summarized by LLM
+3. Summary stored as `compact_summary`
+4. Only recent N message pairs retained
+5. TTL reset
+
+### 3.7 `scheduler.py` - Background Reminder Scheduler
 
 **Responsibility:** Periodic check for due reminders and delivery via Discord DM.
 
@@ -198,7 +236,7 @@ memory_client = AsyncZep(api_key=config.ZEP_API_KEY)
 - Gracefully handles DM failures (user may have DMs disabled).
 - Prevents infinite retries by marking even failed sends as sent.
 
-### 3.7 `tools.py` - Agent Tool Implementations
+### 3.8 `tools.py` - Agent Tool Implementations
 
 **Responsibility:** CRUD operations for todos, calendar, reminders, and information retrieval.
 

@@ -15,6 +15,7 @@ from .config import config
 from . import agent
 from .memory import memory_client
 from .scheduler import ReminderScheduler
+from .conversation_cache import get_conversation_cache
 from .rotator_client import (
     get_rotating_client,
     close_rotating_client,
@@ -354,7 +355,11 @@ class CortanaClient(discord.Client):
         except Exception as e:
             logger.warning(f"Zep memory retrieval error: {e}")
 
-        # 2. Run Agent
+        # 2. Get conversation history from cache
+        conv_cache = get_conversation_cache()
+        history = await conv_cache.get_history(user_id, model=config.LLM_MODEL_NAME)
+        
+        # 3. Run Agent
         user_info = {
             "id": message.author.id,
             "name": message.author.name,
@@ -368,10 +373,14 @@ class CortanaClient(discord.Client):
 
         try:
             async with message.channel.typing():
-                result = await agent.cortana_agent.run(message.content, deps=deps)
+                result = await agent.cortana_agent.run(
+                    message.content, 
+                    deps=deps,
+                    history=history if history else None
+                )
                 response_text = result.output
                 
-                # 3. Send Response (handle long messages)
+                # 4. Send Response (handle long messages)
                 if len(response_text) > 2000:
                     # Split into chunks
                     chunks = [response_text[i:i+1990] for i in range(0, len(response_text), 1990)]
@@ -380,7 +389,11 @@ class CortanaClient(discord.Client):
                 else:
                     await message.channel.send(response_text)
                 
-                # 4. Save Both Messages to Zep
+                # 5. Save messages to conversation cache
+                await conv_cache.add_message(user_id, "user", message.content, model=config.LLM_MODEL_NAME)
+                await conv_cache.add_message(user_id, "assistant", response_text, model=config.LLM_MODEL_NAME)
+                
+                # 6. Save Both Messages to Zep (long-term memory)
                 from zep_cloud.types import Message
                 
                 try:
