@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from .config import config
 from .rotator_client import token_count, rotating_completion, normalize_model_name
@@ -240,6 +240,11 @@ class ConversationCache:
         """
         self._cache: Dict[str, ConversationState] = {}
         self._lock = asyncio.Lock()
+        # Track pending background save tasks
+        self._background_tasks: Set[asyncio.Task] = set()
+        # Per-user locks for file writing serialization
+        self._user_save_locks: Dict[str, asyncio.Lock] = {}
+
         self.ttl_seconds = ttl_seconds
         self.token_threshold = token_threshold
         self.keep_recent = keep_recent
@@ -250,7 +255,21 @@ class ConversationCache:
             self.persistence_dir.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"ConversationCache initialized: TTL={ttl_seconds}s, threshold={token_threshold}")
+
+    async def await_all_background_tasks(self) -> None:
+        """Wait for all pending background tasks to complete (for testing)."""
+        if self._background_tasks:
+            # Filter out done tasks just in case
+            pending = {t for t in self._background_tasks if not t.done()}
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
     
+    def _get_save_lock(self, user_id: str) -> asyncio.Lock:
+        """Get or create the save lock for a user."""
+        if user_id not in self._user_save_locks:
+            self._user_save_locks[user_id] = asyncio.Lock()
+        return self._user_save_locks[user_id]
+
     def _get_persistence_path(self, user_id: str) -> Optional[Path]:
         """Get the persistence file path for a user."""
         if not self.persistence_dir:
@@ -270,26 +289,37 @@ class ConversationCache:
         if not path:
             return None
         
-        try:
-            loop = asyncio.get_running_loop()
-            data = await loop.run_in_executor(None, self._sync_load, path)
+        # Acquire lock to ensure we don't read while writing
+        async with self._get_save_lock(user_id):
+            try:
+                loop = asyncio.get_running_loop()
+                data = await loop.run_in_executor(None, self._sync_load, path)
 
-            if not data:
+                if not data:
+                    return None
+
+                state = ConversationState.from_json(data)
+
+                # Check if loaded state is expired
+                if state.is_expired():
+                    # Note: _delete_file also acquires lock, but RLock behavior needed?
+                    # asyncio.Lock is NOT reentrant.
+                    # But we are in _get_save_lock context.
+                    # We should NOT call _delete_file here directly if it locks.
+                    # Instead, we just return None and let caller handle cleanup?
+                    # Or schedule cleanup?
+
+                    # Workaround: Do the delete manually here since we have the lock
+                    await loop.run_in_executor(None, self._sync_delete, path)
+                    return None
+
+                logger.debug(f"Loaded conversation state from file for user {user_id}")
+                return state
+
+            except Exception as e:
+                logger.warning(f"Failed to load conversation from file: {e}")
                 return None
             
-            state = ConversationState.from_json(data)
-            
-            # Check if loaded state is expired
-            if state.is_expired():
-                await self._delete_file(user_id)
-                return None
-            
-            logger.debug(f"Loaded conversation state from file for user {user_id}")
-            return state
-            
-        except Exception as e:
-            logger.warning(f"Failed to load conversation from file: {e}")
-            return None
     
     def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
         """Synchronous save for executor."""
@@ -297,17 +327,40 @@ class ConversationCache:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     async def _save_to_file(self, state: ConversationState) -> None:
-        """Save conversation state to file."""
-        path = self._get_persistence_path(state.user_id)
+        """
+        Save conversation state to file (blocking).
+
+        DEPRECATED: Use _persist_state_data in a background task instead.
+        Kept for compatibility if needed.
+        """
+        await self._persist_state_data(state.user_id, state.to_json())
+
+    async def _persist_state_data(self, user_id: str, data: Dict[str, Any]) -> None:
+        """
+        Save conversation state data to file securely and sequentially per user.
+
+        Args:
+            user_id: The user ID.
+            data: The JSON-serializable state data.
+        """
+        path = self._get_persistence_path(user_id)
         if not path:
             return
-        
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save conversation to file: {e}")
+
+        # Acquire per-user lock to ensure write order
+        async with self._get_save_lock(user_id):
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._sync_save, path, data)
+                logger.debug(f"Saved conversation state to file for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save conversation to file: {e}")
+
+    def _schedule_save(self, user_id: str, data: Dict[str, Any]) -> None:
+        """Schedule a background save task."""
+        task = asyncio.create_task(self._persist_state_data(user_id, data))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
     
     def _sync_delete(self, path: Path) -> None:
         """Synchronous delete for executor."""
@@ -318,12 +371,13 @@ class ConversationCache:
         """Delete the persistence file for a user."""
         path = self._get_persistence_path(user_id)
         if path:
-            try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._sync_delete, path)
-                logger.debug(f"Deleted conversation file for user {user_id}")
-            except Exception as e:
-                logger.warning(f"Failed to delete conversation file: {e}")
+            async with self._get_save_lock(user_id):
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, self._sync_delete, path)
+                    logger.debug(f"Deleted conversation file for user {user_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete conversation file: {e}")
     
     async def get_or_create(self, user_id: str) -> ConversationState:
         """Get existing conversation or create new one."""
@@ -386,8 +440,11 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            # Create snapshot for saving
+            state_data = state.to_json()
+
+        # Schedule save (fire and forget, outside global lock)
+        self._schedule_save(user_id, state_data)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -473,8 +530,11 @@ class ConversationCache:
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Create snapshot
+            state_data = state.to_json()
+
+        # Schedule save (outside lock)
+        self._schedule_save(user_id, state_data)
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
@@ -549,7 +609,11 @@ Conversation history:
             
             for user_id in expired:
                 del self._cache[user_id]
+                # Delete file first (which uses the lock)
                 await self._delete_file(user_id)
+                # Then clean up the lock to avoid re-creation
+                if user_id in self._user_save_locks:
+                    del self._user_save_locks[user_id]
         
         if expired:
             logger.info(f"Cleaned up {len(expired)} expired conversations")
