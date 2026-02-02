@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from functools import lru_cache
 
 from .config import config
 from .rotator_client import token_count, rotating_completion, normalize_model_name
@@ -36,6 +37,7 @@ DEFAULT_KEEP_RECENT = 3  # Keep last N message pairs after compact
 DEFAULT_CONTEXT_LIMIT = 32000
 
 
+@lru_cache(maxsize=32)
 def get_model_context_limit(model: str) -> int:
     """
     Get the context window limit for a model using litellm.
@@ -132,6 +134,7 @@ class ConversationState:
     user_id: str
     messages: List[CachedMessage] = field(default_factory=list)
     compact_summary: Optional[str] = None
+    summary_token_count: int = 0
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
@@ -168,7 +171,11 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            if self.summary_token_count == 0:
+                self.summary_token_count = token_count(model, text=self.compact_summary)
+            total += self.summary_token_count
+        else:
+            self.summary_token_count = 0
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -184,6 +191,7 @@ class ConversationState:
             "user_id": self.user_id,
             "messages": [m.to_json() for m in self.messages],
             "compact_summary": self.compact_summary,
+            "summary_token_count": self.summary_token_count,
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
@@ -196,6 +204,7 @@ class ConversationState:
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
+            summary_token_count=data.get("summary_token_count", 0),
             last_activity=datetime.fromisoformat(data.get("last_activity", datetime.now().isoformat())),
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
@@ -467,6 +476,7 @@ class ConversationCache:
             
             # Update state
             state.compact_summary = summary
+            state.summary_token_count = 0  # Force recalculation
             state.messages = recent_messages
             state.touch()
             
