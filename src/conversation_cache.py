@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -135,6 +136,11 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    is_deleted: bool = False
+
+    def __post_init__(self):
+        """Initialize the file lock."""
+        self._file_lock = asyncio.Lock()
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -297,33 +303,56 @@ class ConversationCache:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     async def _save_to_file(self, state: ConversationState) -> None:
-        """Save conversation state to file."""
-        path = self._get_persistence_path(state.user_id)
+        """Deprecated: Use _persist_state instead."""
+        await self._persist_state(state.user_id, state.to_json(), state)
+
+    async def _persist_state(self, user_id: str, data: Dict[str, Any], state: ConversationState) -> None:
+        """
+        Save conversation state to file safely using user-specific lock.
+        Should be called outside the global cache lock.
+
+        Args:
+            user_id: User identifier.
+            data: Data to save (snapshot).
+            state: ConversationState object (for lock and flags).
+        """
+        path = self._get_persistence_path(user_id)
         if not path:
             return
-        
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save conversation to file: {e}")
+
+        async with state._file_lock:
+            # Critical check: if state was marked as deleted (e.g. by clear()), abort write
+            # to prevent resurrecting the file.
+            if state.is_deleted:
+                logger.debug(f"Skipping save for deleted conversation user {user_id}")
+                return
+
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._sync_save, path, data)
+                logger.debug(f"Saved conversation state to file for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save conversation to file: {e}")
     
     def _sync_delete(self, path: Path) -> None:
         """Synchronous delete for executor."""
         if path.exists():
             path.unlink()
 
+    async def _delete_file_path(self, path: Path) -> None:
+        """Delete a specific file path."""
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._sync_delete, path)
+            logger.debug(f"Deleted file: {path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete file {path}: {e}")
+
     async def _delete_file(self, user_id: str) -> None:
         """Delete the persistence file for a user."""
         path = self._get_persistence_path(user_id)
         if path:
-            try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._sync_delete, path)
-                logger.debug(f"Deleted conversation file for user {user_id}")
-            except Exception as e:
-                logger.warning(f"Failed to delete conversation file: {e}")
+            await self._delete_file_path(path)
     
     async def get_or_create(self, user_id: str) -> ConversationState:
         """Get existing conversation or create new one."""
@@ -370,6 +399,9 @@ class ConversationCache:
         """
         state = await self.get_or_create(user_id)
         
+        # Data needed for persistence
+        snapshot_data = None
+
         async with self._lock:
             # Calculate token count
             model = model or config.LLM_MODEL_NAME
@@ -386,8 +418,12 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            # Snapshot data for persistence outside global lock
+            snapshot_data = state.to_json()
+
+        # Persist outside global lock
+        if snapshot_data:
+            await self._persist_state(user_id, snapshot_data, state)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -460,6 +496,8 @@ class ConversationCache:
         # Generate summary (outside lock to avoid blocking)
         summary = await self._generate_summary(conversation_text, model)
         
+        snapshot_data = None
+
         async with self._lock:
             state = self._cache.get(user_id)
             if not state:
@@ -473,8 +511,12 @@ class ConversationCache:
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Snapshot data
+            snapshot_data = state.to_json()
+
+        # Persist outside global lock
+        if snapshot_data:
+            await self._persist_state(user_id, snapshot_data, state)
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
@@ -527,9 +569,29 @@ Conversation history:
         Args:
             user_id: User identifier.
         """
+        trash_path = None
+
         async with self._lock:
             if user_id in self._cache:
+                state = self._cache[user_id]
+                state.is_deleted = True
                 del self._cache[user_id]
+
+            # Rename file to trash inside global lock to prevent get_or_create from loading it
+            path = self._get_persistence_path(user_id)
+            if path and path.exists():
+                trash_path = path.with_suffix(f".trash_{int(time.time()*1000)}")
+                try:
+                    path.rename(trash_path)
+                except OSError as e:
+                    logger.warning(f"Failed to rename conversation file for deletion: {e}")
+                    trash_path = None
+
+        # Delete file(s) outside global lock
+        if trash_path:
+            await self._delete_file_path(trash_path)
+        else:
+            # Fallback if rename didn't happen (e.g. file didn't exist or rename failed)
             await self._delete_file(user_id)
         
         logger.info(f"Cleared conversation cache for user {user_id}")
