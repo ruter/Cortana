@@ -136,6 +136,10 @@ class ConversationState:
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
     
+    # Internal state for concurrency control
+    _deleted: bool = field(default=False, init=False, repr=False)
+    _file_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
         return datetime.now() > self.last_activity + timedelta(seconds=self.ttl_seconds)
@@ -296,16 +300,22 @@ class ConversationCache:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    async def _save_to_file(self, state: ConversationState) -> None:
-        """Save conversation state to file."""
-        path = self._get_persistence_path(state.user_id)
+    async def _save_to_file(self, user_id: str, data: Dict[str, Any]) -> None:
+        """
+        Save conversation state data to file.
+
+        Args:
+            user_id: User identifier.
+            data: JSON-serializable conversation state.
+        """
+        path = self._get_persistence_path(user_id)
         if not path:
             return
         
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
+            await loop.run_in_executor(None, self._sync_save, path, data)
+            logger.debug(f"Saved conversation state to file for user {user_id}")
         except Exception as e:
             logger.warning(f"Failed to save conversation to file: {e}")
     
@@ -386,8 +396,13 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            # Snapshot state for async save
+            data = state.to_json()
+
+        # Save to file outside global lock, but serialized per user
+        async with state._file_lock:
+            if not state._deleted:
+                await self._save_to_file(user_id, data)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -444,14 +459,17 @@ class ConversationCache:
             if not state or len(state.messages) <= self.keep_recent * 2:
                 return
             
-            # Prepare messages for summarization
-            messages_to_summarize = state.messages[:-self.keep_recent * 2]
-            recent_messages = state.messages[-self.keep_recent * 2:]
+            # Determine how many messages to summarize
+            num_to_summarize = len(state.messages) - self.keep_recent * 2
+            messages_to_summarize = state.messages[:num_to_summarize]
+
+            # Capture initial summary for concurrency check
+            initial_summary = state.compact_summary
             
             # Build conversation text for summary
             conversation_text = ""
-            if state.compact_summary:
-                conversation_text = f"[Previous Summary]\n{state.compact_summary}\n\n[New Conversation]\n"
+            if initial_summary:
+                conversation_text = f"[Previous Summary]\n{initial_summary}\n\n[New Conversation]\n"
             
             for msg in messages_to_summarize:
                 role_label = "User" if msg.role == "user" else "Assistant"
@@ -462,21 +480,33 @@ class ConversationCache:
         
         async with self._lock:
             state = self._cache.get(user_id)
-            if not state:
+            # Ensure state exists and hasn't been compacted by another task while we were generating summary
+            if not state or state.compact_summary != initial_summary:
+                logger.debug(f"Compaction aborted for user {user_id}: State changed or concurrent compaction")
                 return
             
             # Update state
             state.compact_summary = summary
-            state.messages = recent_messages
+
+            # Safer removal of summarized messages
+            # Use the number we calculated, so if new messages were added, they are preserved
+            if num_to_summarize > 0 and len(state.messages) >= num_to_summarize:
+                del state.messages[:num_to_summarize]
+
             state.touch()
             
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Snapshot state for async save
+            data = state.to_json()
+
+        # Save to file outside global lock
+        async with state._file_lock:
+            if not state._deleted:
+                await self._save_to_file(user_id, data)
         
-        logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
+        logger.info(f"Compacted conversation for user {user_id}: {num_to_summarize} messages summarized")
     
     async def _generate_summary(self, conversation_text: str, model: str) -> str:
         """
@@ -527,9 +557,18 @@ Conversation history:
         Args:
             user_id: User identifier.
         """
+        state = None
         async with self._lock:
             if user_id in self._cache:
+                state = self._cache[user_id]
+                state._deleted = True
                 del self._cache[user_id]
+
+        # Delete file outside global lock
+        if state:
+            async with state._file_lock:
+                await self._delete_file(user_id)
+        else:
             await self._delete_file(user_id)
         
         logger.info(f"Cleared conversation cache for user {user_id}")
@@ -541,20 +580,29 @@ Conversation history:
         Returns:
             Number of conversations removed.
         """
+        expired_states = []
+
         async with self._lock:
-            expired = [
+            expired_ids = [
                 user_id for user_id, state in self._cache.items()
                 if state.is_expired()
             ]
             
-            for user_id in expired:
+            for user_id in expired_ids:
+                state = self._cache[user_id]
+                state._deleted = True
                 del self._cache[user_id]
+                expired_states.append((user_id, state))
+
+        # Process deletions outside global lock
+        for user_id, state in expired_states:
+            async with state._file_lock:
                 await self._delete_file(user_id)
         
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired conversations")
+        if expired_states:
+            logger.info(f"Cleaned up {len(expired_states)} expired conversations")
         
-        return len(expired)
+        return len(expired_states)
     
     def get_stats(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
