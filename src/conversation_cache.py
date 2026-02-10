@@ -240,6 +240,7 @@ class ConversationCache:
         """
         self._cache: Dict[str, ConversationState] = {}
         self._lock = asyncio.Lock()
+        self._file_locks: Dict[str, asyncio.Lock] = {}
         self.ttl_seconds = ttl_seconds
         self.token_threshold = token_threshold
         self.keep_recent = keep_recent
@@ -257,6 +258,16 @@ class ConversationCache:
             return None
         return self.persistence_dir / f"conversation_{user_id}.jsonl"
     
+    def _get_file_lock(self, user_id: str) -> asyncio.Lock:
+        """
+        Get the file lock for a user.
+
+        Must be called while holding self._lock.
+        """
+        if user_id not in self._file_locks:
+            self._file_locks[user_id] = asyncio.Lock()
+        return self._file_locks[user_id]
+
     def _sync_load(self, path: Path) -> Optional[Dict[str, Any]]:
         """Synchronous load for executor."""
         if not path.exists():
@@ -296,16 +307,22 @@ class ConversationCache:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    async def _save_to_file(self, state: ConversationState) -> None:
-        """Save conversation state to file."""
-        path = self._get_persistence_path(state.user_id)
+    async def _save_to_file(self, user_id: str, data: Dict[str, Any]) -> None:
+        """
+        Save conversation state to file.
+
+        Args:
+            user_id: The user ID.
+            data: The dictionary data to save (snapshot of state).
+        """
+        path = self._get_persistence_path(user_id)
         if not path:
             return
         
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
+            await loop.run_in_executor(None, self._sync_save, path, data)
+            logger.debug(f"Saved conversation state to file for user {user_id}")
         except Exception as e:
             logger.warning(f"Failed to save conversation to file: {e}")
     
@@ -332,9 +349,15 @@ class ConversationCache:
             if user_id in self._cache:
                 state = self._cache[user_id]
                 if state.is_expired():
-                    # Expired, remove and create new
+                    # Expired, remove from cache.
                     del self._cache[user_id]
-                    await self._delete_file(user_id)
+                    # Create new immediately, skipping file load since it's also expired/old
+                    state = ConversationState(
+                        user_id=user_id,
+                        ttl_seconds=self.ttl_seconds,
+                    )
+                    self._cache[user_id] = state
+                    return state
                 else:
                     return state
             
@@ -370,6 +393,9 @@ class ConversationCache:
         """
         state = await self.get_or_create(user_id)
         
+        snapshot = None
+        file_lock = None
+
         async with self._lock:
             # Calculate token count
             model = model or config.LLM_MODEL_NAME
@@ -386,8 +412,16 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            # Create snapshot for saving
+            snapshot = state.to_json()
+
+            # Get file lock under global lock
+            file_lock = self._get_file_lock(user_id)
+
+        # Save to file (outside global lock, under per-user lock)
+        if snapshot and file_lock:
+            async with file_lock:
+                await self._save_to_file(user_id, snapshot)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -460,6 +494,9 @@ class ConversationCache:
         # Generate summary (outside lock to avoid blocking)
         summary = await self._generate_summary(conversation_text, model)
         
+        snapshot = None
+        file_lock = None
+
         async with self._lock:
             state = self._cache.get(user_id)
             if not state:
@@ -473,8 +510,14 @@ class ConversationCache:
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Create snapshot
+            snapshot = state.to_json()
+            file_lock = self._get_file_lock(user_id)
+
+        # Save to file
+        if snapshot and file_lock:
+            async with file_lock:
+                await self._save_to_file(user_id, snapshot)
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
@@ -527,9 +570,14 @@ Conversation history:
         Args:
             user_id: User identifier.
         """
+        file_lock = None
         async with self._lock:
             if user_id in self._cache:
                 del self._cache[user_id]
+            file_lock = self._get_file_lock(user_id)
+
+        # Delete file (outside global lock)
+        async with file_lock:
             await self._delete_file(user_id)
         
         logger.info(f"Cleared conversation cache for user {user_id}")
@@ -541,20 +589,31 @@ Conversation history:
         Returns:
             Number of conversations removed.
         """
+        expired_items = []  # List of (user_id, file_lock)
+
         async with self._lock:
-            expired = [
+            expired_ids = [
                 user_id for user_id, state in self._cache.items()
                 if state.is_expired()
             ]
             
-            for user_id in expired:
+            for user_id in expired_ids:
                 del self._cache[user_id]
+                file_lock = self._get_file_lock(user_id)
+                expired_items.append((user_id, file_lock))
+
+                # Since we are cleaning up, we can also remove the lock if we are careful?
+                # No, let's keep it simple and safe.
+        
+        # Delete files outside global lock
+        for user_id, file_lock in expired_items:
+            async with file_lock:
                 await self._delete_file(user_id)
+
+        if expired_items:
+            logger.info(f"Cleaned up {len(expired_items)} expired conversations")
         
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired conversations")
-        
-        return len(expired)
+        return len(expired_items)
     
     def get_stats(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
