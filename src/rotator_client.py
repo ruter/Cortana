@@ -38,6 +38,32 @@ _client_lock = asyncio.Lock()
 _initialization_attempted = False
 
 
+def get_provider_base_url(provider: str) -> Optional[str]:
+    """
+    Get the base URL for a specific provider.
+    
+    Currently supports:
+    - openai_compatible: Uses OPENAI_COMPATIBLE_BASE_URL env var
+    
+    Args:
+        provider: Provider name (e.g., "openai_compatible", "compatible")
+    
+    Returns:
+        Base URL string if configured, None otherwise
+    """
+    provider_lower = provider.lower()
+    
+    if provider_lower in ("openai_compatible", "compatible"):
+        # Check both the specific config and the generic LLM_BASE_URL
+        if config.OPENAI_COMPATIBLE_BASE_URL:
+            return config.OPENAI_COMPATIBLE_BASE_URL
+        # Fallback to generic LLM_BASE_URL if set
+        if config.LLM_BASE_URL and config.LLM_BASE_URL != "https://api.openai.com/v1":
+            return config.LLM_BASE_URL
+    
+    return None
+
+
 async def get_rotating_client():
     """
     Get or create the RotatingClient singleton.
@@ -176,6 +202,9 @@ def normalize_model_name(model: str, prefer_oauth: bool = False) -> str:
         return f"groq/{model}"
     elif model_lower.startswith("mistral"):
         return f"mistral/{model}"
+    elif model_lower.startswith("compatible"):
+        # Explicit openai_compatible or compatible prefix
+        return f"openai_compatible/{model}"
     else:
         # Default to openai for unknown models
         return f"openai/{model}"
@@ -186,7 +215,9 @@ OAUTH_PROVIDERS = {"gemini_cli", "antigravity", "qwen_code", "iflow"}
 
 # Valid API key provider prefixes  
 API_PROVIDERS = {"openai", "anthropic", "gemini", "google", "qwen", "deepseek", 
-                 "meta", "groq", "mistral", "nvidia", "together", "fireworks"}
+                 "meta", "groq", "mistral", "nvidia", "together", "fireworks",
+                 # OpenAI Compatible providers
+                 "openai_compatible", "compatible"}
 
 
 def is_oauth_provider(provider: str) -> bool:
@@ -234,13 +265,22 @@ async def rotating_completion(
     # Try to get rotating client
     client = await get_rotating_client()
     
+    # Get base URL for compatible providers
+    provider = get_provider_from_model(model)
+    base_url = get_provider_base_url(provider)
+    
     if client is not None:
-        # Use rotating client
+        # Use rotating client - pass base_url if configured
+        extra_kwargs = {}
+        if base_url:
+            extra_kwargs["base_url"] = base_url
+        
         return await client.acompletion(
             model=model,
             messages=messages,
             stream=stream,
-            **kwargs
+            **kwargs,
+            **extra_kwargs
         )
     else:
         # Fallback to direct litellm
@@ -251,7 +291,14 @@ async def rotating_completion(
         # For fallback, we need to set the API key
         if config.LLM_API_KEY:
             kwargs.setdefault("api_key", config.LLM_API_KEY)
-        if config.LLM_BASE_URL and "openai" in model.lower():
+        
+        # For compatible providers, use the configured base URL and API key
+        if base_url:
+            kwargs.setdefault("api_base", base_url)
+            # Use compatible provider key if available, otherwise fall back to LLM_API_KEY
+            if config.OPENAI_COMPATIBLE_API_KEY:
+                kwargs.setdefault("api_key", config.OPENAI_COMPATIBLE_API_KEY)
+        elif config.LLM_BASE_URL and "openai" in model.lower():
             kwargs.setdefault("api_base", config.LLM_BASE_URL)
         
         return await litellm.acompletion(
