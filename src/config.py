@@ -125,6 +125,11 @@ class Config:
     # Example: ROTATOR_WHITELIST_MODELS='{"openai": ["gpt-4o", "gpt-4-turbo"]}'
     ROTATOR_WHITELIST_MODELS = _parse_json_env("ROTATOR_WHITELIST_MODELS", {})
     
+    # OpenAI Compatible Provider Configuration
+    # For connecting to OpenAI-compatible endpoints (local models, vLLM, OpenRouter, etc.)
+    OPENAI_COMPATIBLE_BASE_URL = os.getenv("OPENAI_COMPATIBLE_BASE_URL", "").rstrip("/")
+    OPENAI_COMPATIBLE_API_KEY = os.getenv("OPENAI_COMPATIBLE_API_KEY", "")
+    
     # Per-provider concurrent request limits (JSON object)
     # Example: ROTATOR_MAX_CONCURRENT_PER_KEY='{"openai": 5, "gemini": 3}'
     ROTATOR_MAX_CONCURRENT_PER_KEY = _parse_json_env("ROTATOR_MAX_CONCURRENT_PER_KEY", {})

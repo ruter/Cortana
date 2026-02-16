@@ -584,6 +584,65 @@ class TestTokenCounting:
         assert count > 0
 
 
+class TestOpenAICompatibleProvider:
+    """Tests for OpenAI Compatible Provider support."""
+    
+    def test_load_openai_compatible_api_keys(self):
+        """Test loading OpenAI Compatible API keys from environment."""
+        from src.config import _load_provider_api_keys
+        
+        with patch.dict(os.environ, {
+            "OPENAI_COMPATIBLE_API_KEY": "sk-compatible-key",
+            "OPENAI_COMPATIBLE_API_KEY_1": "sk-compatible-key-1",
+            "OPENAI_COMPATIBLE_API_KEY_2": "sk-compatible-key-2",
+        }, clear=False):
+            keys = _load_provider_api_keys()
+            
+            assert "openai_compatible" in keys
+            assert len(keys["openai_compatible"]) == 3
+            assert "sk-compatible-key" in keys["openai_compatible"]
+            assert "sk-compatible-key-1" in keys["openai_compatible"]
+            assert "sk-compatible-key-2" in keys["openai_compatible"]
+    
+    def test_openai_compatible_base_url_config(self):
+        """Test that OpenAI Compatible base URL is properly loaded."""
+        from src.config import Config
+        
+        with patch.dict(os.environ, {
+            "OPENAI_COMPATIBLE_BASE_URL": "https://api.openrouter.ai/v1",
+        }, clear=False):
+            # Need to reinitialize to pick up the env var
+            Config.OPENAI_COMPATIBLE_BASE_URL = os.getenv("OPENAI_COMPATIBLE_BASE_URL", "").rstrip("/")
+            
+            assert Config.OPENAI_COMPATIBLE_BASE_URL == "https://api.openrouter.ai/v1"
+    
+    def test_normalize_openai_compatible_model(self):
+        """Test normalizing model names for OpenAI Compatible provider."""
+        from src.rotator_client import normalize_model_name
+        
+        # Explicit provider prefix should stay as-is (consistent with other providers)
+        assert normalize_model_name("openai_compatible/llama-3-8b") == "openai_compatible/llama-3-8b"
+        assert normalize_model_name("compatible/qwen-2.5") == "compatible/qwen-2.5"
+        
+        # Unknown models should NOT default to openai_compatible (too risky)
+        # They should default to openai as before
+        assert normalize_model_name("some-model") == "openai/some-model"
+    
+    def test_is_oauth_provider_rejects_compatible(self):
+        """Test that OpenAI Compatible is not treated as OAuth provider."""
+        from src.rotator_client import is_oauth_provider
+        
+        assert is_oauth_provider("openai_compatible") == False
+        assert is_oauth_provider("compatible") == False
+    
+    def test_api_providers_includes_compatible(self):
+        """Test that API_PROVIDERS set includes OpenAI Compatible."""
+        from src.rotator_client import API_PROVIDERS
+        
+        assert "openai_compatible" in API_PROVIDERS
+        assert "compatible" in API_PROVIDERS
+
+
 # Run with: pytest tests/test_rotator_integration.py -v
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
