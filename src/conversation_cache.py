@@ -136,6 +136,20 @@ class ConversationState:
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
     
+    # Internal fields excluded from init/repr
+    file_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    is_deleted: bool = field(default=False, init=False, repr=False)
+    version: int = field(default=0, init=False, repr=False)  # Current in-memory version
+    persisted_version: int = field(default=0, init=False, repr=False)  # Last persisted version
+
+    def __post_init__(self):
+        """Initialize internal fields."""
+        # Use existing event loop if available, or create a new Lock which will bind when used
+        self.file_lock = asyncio.Lock()
+        self.is_deleted = False
+        self.version = 0
+        self.persisted_version = 0
+
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
         return datetime.now() > self.last_activity + timedelta(seconds=self.ttl_seconds)
@@ -281,6 +295,7 @@ class ConversationCache:
             
             # Check if loaded state is expired
             if state.is_expired():
+                # Lock not needed here as we haven't exposed state yet
                 await self._delete_file(user_id)
                 return None
             
@@ -294,18 +309,19 @@ class ConversationCache:
     def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
         """Synchronous save for executor."""
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            # Removed indent=2 for performance and size
+            json.dump(data, f, ensure_ascii=False)
 
-    async def _save_to_file(self, state: ConversationState) -> None:
-        """Save conversation state to file."""
-        path = self._get_persistence_path(state.user_id)
+    async def _save_snapshot(self, user_id: str, data: Dict[str, Any]) -> None:
+        """Save conversation snapshot to file."""
+        path = self._get_persistence_path(user_id)
         if not path:
             return
         
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
+            await loop.run_in_executor(None, self._sync_save, path, data)
+            logger.debug(f"Saved conversation state to file for user {user_id}")
         except Exception as e:
             logger.warning(f"Failed to save conversation to file: {e}")
     
@@ -334,11 +350,27 @@ class ConversationCache:
                 if state.is_expired():
                     # Expired, remove and create new
                     del self._cache[user_id]
-                    await self._delete_file(user_id)
+                    # Mark old state as deleted to prevent pending writes
+                    state.is_deleted = True
+                    # Delete file asynchronously (fire and forget or wait?)
+                    # Ideally we wait, but we can't do it under _lock if we want to be fast.
+                    # But get_or_create is expected to return a valid state.
+                    # If we delete file here, we block.
+                    # But since we're creating a NEW state, the old file content is irrelevant.
+                    # We can just schedule deletion.
+
+                    # However, to be safe and simple:
+                    # Release lock, delete file, re-acquire lock? No, race condition.
+
+                    # Better: Just overwrite the file with new state later.
+                    # But we need to ensure old state's pending writes don't overwrite new state.
+                    # Old state `is_deleted` = True prevents that.
                 else:
                     return state
             
-            # Try to load from file
+            # Try to load from file (only if not in cache)
+            # Use a separate lock or just allow potential duplicate loads (last one wins)?
+            # We are under _lock, so it's safe.
             state = await self._load_from_file(user_id)
             if state:
                 self._cache[user_id] = state
@@ -370,6 +402,9 @@ class ConversationCache:
         """
         state = await self.get_or_create(user_id)
         
+        snapshot = None
+        current_version = 0
+
         async with self._lock:
             # Calculate token count
             model = model or config.LLM_MODEL_NAME
@@ -385,11 +420,19 @@ class ConversationCache:
             state.messages.append(msg)
             state.total_tokens += tokens
             state.touch()
+            state.version += 1
+            current_version = state.version
             
-            # Save to file
-            await self._save_to_file(state)
+            # Create snapshot for persistence
+            snapshot = state.to_json()
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
+
+        # Save to file (outside global lock)
+        async with state.file_lock:
+            if not state.is_deleted and current_version > state.persisted_version:
+                await self._save_snapshot(user_id, snapshot)
+                state.persisted_version = current_version
     
     async def get_history(
         self,
@@ -433,12 +476,10 @@ class ConversationCache:
     async def _compact(self, user_id: str, model: str) -> None:
         """
         Compact the conversation by summarizing old messages.
-        
-        1. Generate LLM summary of conversation
-        2. Keep only recent N message pairs
-        3. Store summary as compact_summary
-        4. Reset TTL
         """
+        messages_to_summarize = []
+        state = None
+
         async with self._lock:
             state = self._cache.get(user_id)
             if not state or len(state.messages) <= self.keep_recent * 2:
@@ -446,7 +487,6 @@ class ConversationCache:
             
             # Prepare messages for summarization
             messages_to_summarize = state.messages[:-self.keep_recent * 2]
-            recent_messages = state.messages[-self.keep_recent * 2:]
             
             # Build conversation text for summary
             conversation_text = ""
@@ -460,21 +500,44 @@ class ConversationCache:
         # Generate summary (outside lock to avoid blocking)
         summary = await self._generate_summary(conversation_text, model)
         
+        snapshot = None
+        current_version = 0
+
         async with self._lock:
             state = self._cache.get(user_id)
             if not state:
                 return
             
+            # Check if state changed significantly while we were summarizing?
+            # We are assuming compact is the only one removing messages?
+            # If add_message happened, it appended messages.
+
+            # We need to re-fetch recent messages from state.messages in case it grew
+            # But we are removing the prefix.
+            # We should verify that the prefix is still what we expect?
+            # Actually, _compact is usually called serially or triggered by get_history.
+            # But let's be safe. We just take the last N*2.
+
+            recent_messages = state.messages[-self.keep_recent * 2:]
+
             # Update state
             state.compact_summary = summary
             state.messages = recent_messages
             state.touch()
+            state.version += 1
+            current_version = state.version
             
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Create snapshot
+            snapshot = state.to_json()
+
+        # Save to file (outside global lock)
+        async with state.file_lock:
+             if not state.is_deleted and current_version > state.persisted_version:
+                await self._save_snapshot(user_id, snapshot)
+                state.persisted_version = current_version
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
@@ -527,9 +590,20 @@ Conversation history:
         Args:
             user_id: User identifier.
         """
+        state = None
         async with self._lock:
             if user_id in self._cache:
+                state = self._cache[user_id]
                 del self._cache[user_id]
+                # Mark as deleted to prevent concurrent writes from persisting
+                state.is_deleted = True
+
+        # Now delete the file safely
+        if state:
+            async with state.file_lock:
+                await self._delete_file(user_id)
+        else:
+            # If not in cache, ensure file is deleted anyway
             await self._delete_file(user_id)
         
         logger.info(f"Cleared conversation cache for user {user_id}")
@@ -541,20 +615,29 @@ Conversation history:
         Returns:
             Number of conversations removed.
         """
+        expired_states = []
+
         async with self._lock:
-            expired = [
+            expired_ids = [
                 user_id for user_id, state in self._cache.items()
                 if state.is_expired()
             ]
             
-            for user_id in expired:
+            for user_id in expired_ids:
+                state = self._cache[user_id]
                 del self._cache[user_id]
+                state.is_deleted = True
+                expired_states.append((user_id, state))
+
+        # Delete files outside global lock
+        for user_id, state in expired_states:
+            async with state.file_lock:
                 await self._delete_file(user_id)
         
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired conversations")
+        if expired_states:
+            logger.info(f"Cleaned up {len(expired_states)} expired conversations")
         
-        return len(expired)
+        return len(expired_states)
     
     def get_stats(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
