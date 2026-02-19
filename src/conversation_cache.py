@@ -136,6 +136,12 @@ class ConversationState:
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
     
+    # Internal fields for concurrency management
+    version: int = field(default=0, init=False)
+    persisted_version: int = field(default=0, init=False)
+    is_deleted: bool = field(default=False, init=False)
+    file_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
         return datetime.now() > self.last_activity + timedelta(seconds=self.ttl_seconds)
@@ -281,6 +287,9 @@ class ConversationCache:
             
             # Check if loaded state is expired
             if state.is_expired():
+                # We need to delete it. Since we are in load process (holding global lock usually),
+                # and this is a fresh state object, we can try to delete.
+                # But _delete_file uses executor.
                 await self._delete_file(user_id)
                 return None
             
@@ -296,26 +305,45 @@ class ConversationCache:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
+    async def _save_snapshot(self, state: ConversationState, data: Dict[str, Any], version: int) -> None:
+        """
+        Save conversation state snapshot to file.
+        Uses per-user lock and version checking to prevent race conditions.
+        """
+        async with state.file_lock:
+            # Check if state has been marked as deleted
+            if state.is_deleted:
+                return
+
+            # Check if we are overwriting with older data
+            if version <= state.persisted_version:
+                return
+
+            path = self._get_persistence_path(state.user_id)
+            if not path:
+                return
+
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._sync_save, path, data)
+                state.persisted_version = version
+                logger.debug(f"Saved conversation state to file for user {state.user_id} (v{version})")
+            except Exception as e:
+                logger.warning(f"Failed to save conversation to file: {e}")
+
     async def _save_to_file(self, state: ConversationState) -> None:
-        """Save conversation state to file."""
-        path = self._get_persistence_path(state.user_id)
-        if not path:
-            return
-        
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save conversation to file: {e}")
-    
+        """Deprecated: Use _save_snapshot instead."""
+        # Kept for compatibility if needed, but implementation updated to use new mechanism
+        snapshot = state.to_json()
+        await self._save_snapshot(state, snapshot, state.version)
+
     def _sync_delete(self, path: Path) -> None:
         """Synchronous delete for executor."""
         if path.exists():
             path.unlink()
 
     async def _delete_file(self, user_id: str) -> None:
-        """Delete the persistence file for a user."""
+        """Delete the persistence file for a user directly."""
         path = self._get_persistence_path(user_id)
         if path:
             try:
@@ -324,6 +352,21 @@ class ConversationCache:
                 logger.debug(f"Deleted conversation file for user {user_id}")
             except Exception as e:
                 logger.warning(f"Failed to delete conversation file: {e}")
+
+    async def _delete_state_file(self, state: ConversationState) -> None:
+        """
+        Delete the persistence file for a state.
+        Uses per-user lock to prevent race conditions with save.
+        """
+        async with state.file_lock:
+            path = self._get_persistence_path(state.user_id)
+            if path:
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, self._sync_delete, path)
+                    logger.debug(f"Deleted conversation file for user {state.user_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete conversation file: {e}")
     
     async def get_or_create(self, user_id: str) -> ConversationState:
         """Get existing conversation or create new one."""
@@ -334,7 +377,9 @@ class ConversationCache:
                 if state.is_expired():
                     # Expired, remove and create new
                     del self._cache[user_id]
-                    await self._delete_file(user_id)
+                    state.is_deleted = True
+                    # Delete the file for the expired state
+                    await self._delete_state_file(state)
                 else:
                     return state
             
@@ -370,6 +415,9 @@ class ConversationCache:
         """
         state = await self.get_or_create(user_id)
         
+        snapshot_data = None
+        current_version = 0
+
         async with self._lock:
             # Calculate token count
             model = model or config.LLM_MODEL_NAME
@@ -386,8 +434,14 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            # Increment version and snapshot
+            state.version += 1
+            current_version = state.version
+            snapshot_data = state.to_json()
+
+        # Save to file (outside lock)
+        if snapshot_data:
+            await self._save_snapshot(state, snapshot_data, current_version)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -439,6 +493,7 @@ class ConversationCache:
         3. Store summary as compact_summary
         4. Reset TTL
         """
+        # Phase 1: Preparation (Read only)
         async with self._lock:
             state = self._cache.get(user_id)
             if not state or len(state.messages) <= self.keep_recent * 2:
@@ -460,6 +515,11 @@ class ConversationCache:
         # Generate summary (outside lock to avoid blocking)
         summary = await self._generate_summary(conversation_text, model)
         
+        snapshot_data = None
+        current_version = 0
+        state = None
+
+        # Phase 2: Update and Snapshot
         async with self._lock:
             state = self._cache.get(user_id)
             if not state:
@@ -473,8 +533,14 @@ class ConversationCache:
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Increment version and snapshot
+            state.version += 1
+            current_version = state.version
+            snapshot_data = state.to_json()
+
+        # Save to file (outside lock)
+        if state and snapshot_data:
+             await self._save_snapshot(state, snapshot_data, current_version)
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
@@ -527,10 +593,19 @@ Conversation history:
         Args:
             user_id: User identifier.
         """
+        state_to_delete = None
+
         async with self._lock:
             if user_id in self._cache:
+                state_to_delete = self._cache[user_id]
                 del self._cache[user_id]
-            await self._delete_file(user_id)
+                state_to_delete.is_deleted = True
+
+        if state_to_delete:
+             await self._delete_state_file(state_to_delete)
+        else:
+            # Fallback for when state was not in memory but file might exist
+             await self._delete_file(user_id)
         
         logger.info(f"Cleared conversation cache for user {user_id}")
     
@@ -541,6 +616,8 @@ Conversation history:
         Returns:
             Number of conversations removed.
         """
+        states_to_delete = []
+
         async with self._lock:
             expired = [
                 user_id for user_id, state in self._cache.items()
@@ -548,13 +625,19 @@ Conversation history:
             ]
             
             for user_id in expired:
+                state = self._cache[user_id]
                 del self._cache[user_id]
-                await self._delete_file(user_id)
+                state.is_deleted = True
+                states_to_delete.append(state)
+
+        # Delete files outside lock
+        for state in states_to_delete:
+            await self._delete_state_file(state)
         
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired conversations")
+        if states_to_delete:
+            logger.info(f"Cleaned up {len(states_to_delete)} expired conversations")
         
-        return len(expired)
+        return len(states_to_delete)
     
     def get_stats(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
