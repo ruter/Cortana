@@ -5,7 +5,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
-from .database import db
+from .database import db, execute_async
 from .memory import memory_client
 from .cortana_context import CortanaContext
 
@@ -40,10 +40,10 @@ async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
     try:
         # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+        response = await execute_async(db.table("user_settings").select("user_id").eq("user_id", user_id))
         if not response.data:
             # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+            await execute_async(db.table("user_settings").insert({"user_id": user_id}))
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
@@ -74,7 +74,7 @@ async def add_todo(ctx: CortanaContext, content: str, due_date: Optional[datetim
         data["due_date"] = due_date.isoformat()
     
     try:
-        response = db.table("todos").insert(data).execute()
+        response = await execute_async(db.table("todos").insert(data))
         return f"Todo added: {content}"
     except Exception as e:
         return f"Error adding todo: {str(e)}"
@@ -89,7 +89,7 @@ async def list_todos(ctx: CortanaContext, status: str = "PENDING", limit: int = 
     """
     user_id = ctx.deps['user_info']['id']
     try:
-        response = db.table("todos").select("*").eq("user_id", user_id).eq("status", status).order("created_at", desc=True).limit(limit).execute()
+        response = await execute_async(db.table("todos").select("*").eq("user_id", user_id).eq("status", status).order("created_at", desc=True).limit(limit))
         todos = [Todo(**item) for item in response.data]
         if not todos:
             return f"No {status.lower()} todos found."
@@ -112,11 +112,11 @@ async def complete_todo(ctx: CortanaContext, todo_id: int) -> str:
     user_id = ctx.deps['user_info']['id']
     try:
         # Verify ownership
-        response = db.table("todos").select("*").eq("id", todo_id).eq("user_id", user_id).execute()
+        response = await execute_async(db.table("todos").select("*").eq("id", todo_id).eq("user_id", user_id))
         if not response.data:
             return "Todo not found or access denied."
         
-        db.table("todos").update({"status": "COMPLETED"}).eq("id", todo_id).execute()
+        await execute_async(db.table("todos").update({"status": "COMPLETED"}).eq("id", todo_id))
         return f"Todo {todo_id} marked as completed."
     except Exception as e:
         return f"Error completing todo: {str(e)}"
@@ -144,7 +144,7 @@ async def add_calendar_event(ctx: CortanaContext, title: str, start_time: dateti
         "location": location
     }
     try:
-        db.table("calendar_events").insert(data).execute()
+        await execute_async(db.table("calendar_events").insert(data))
         return f"Event added: {title} at {start_time}"
     except Exception as e:
         return f"Error adding event: {str(e)}"
@@ -160,11 +160,10 @@ async def check_calendar_availability(ctx: CortanaContext, start_range: datetime
     user_id = ctx.deps['user_info']['id']
     try:
         # Overlap logic: (StartA <= EndB) and (EndA >= StartB)
-        response = db.table("calendar_events").select("*") \
+        response = await execute_async(db.table("calendar_events").select("*") \
             .eq("user_id", user_id) \
             .lte("start_time", end_range.isoformat()) \
-            .gte("end_time", start_range.isoformat()) \
-            .execute()
+            .gte("end_time", start_range.isoformat()))
         
         if response.data:
             events = [f"{e['title']} ({e['start_time']} - {e['end_time']})" for e in response.data]
@@ -337,7 +336,7 @@ async def add_reminder(ctx: CortanaContext, message: str, remind_time: datetime,
     }
     
     try:
-        response = db.table("reminders").insert(data).execute()
+        response = await execute_async(db.table("reminders").insert(data))
         if response.data:
             reminder_id = response.data[0]['id']
             return f"Reminder set: '{message}' at {remind_time.strftime('%Y-%m-%d %H:%M %Z')} (ID: {reminder_id})"
@@ -361,7 +360,7 @@ async def list_reminders(ctx: CortanaContext, include_sent: bool = False, limit:
         if not include_sent:
             query = query.eq("is_sent", False)
         
-        response = query.order("remind_time", desc=False).limit(limit).execute()
+        response = await execute_async(query.order("remind_time", desc=False).limit(limit))
         
         if not response.data:
             status = "reminders" if include_sent else "pending reminders"
@@ -390,7 +389,7 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
     
     try:
         # Verify ownership and that reminder exists
-        response = db.table("reminders").select("*").eq("id", reminder_id).eq("user_id", user_id).execute()
+        response = await execute_async(db.table("reminders").select("*").eq("id", reminder_id).eq("user_id", user_id))
         
         if not response.data:
             return "Reminder not found or access denied."
@@ -401,7 +400,7 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
             return f"Reminder {reminder_id} has already been sent and cannot be cancelled."
         
         # Delete the reminder
-        db.table("reminders").delete().eq("id", reminder_id).execute()
+        await execute_async(db.table("reminders").delete().eq("id", reminder_id))
         return f"Reminder {reminder_id} has been cancelled: '{reminder.message}'"
     except Exception as e:
         return f"Error cancelling reminder: {str(e)}"

@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-from .database import db
+from .database import db, execute_async
 from .config import config
 
 if TYPE_CHECKING:
@@ -28,10 +28,9 @@ class ReminderScheduler:
             now = datetime.now(timezone.utc)
             
             # Query for reminders that are due and not yet sent
-            response = db.table("reminders").select("*") \
+            response = await execute_async(db.table("reminders").select("*") \
                 .lte("remind_time", now.isoformat()) \
-                .eq("is_sent", False) \
-                .execute()
+                .eq("is_sent", False))
             
             if not response.data:
                 return
@@ -62,7 +61,7 @@ class ReminderScheduler:
             if user is None:
                 print(f"Could not find user {user_id}")
                 # Mark as sent anyway to avoid retrying
-                db.table("reminders").update({"is_sent": True}).eq("id", reminder_id).execute()
+                await execute_async(db.table("reminders").update({"is_sent": True}).eq("id", reminder_id))
                 return
             
             # Prepare the reminder message
@@ -74,7 +73,7 @@ class ReminderScheduler:
                 print(f"Sent reminder {reminder_id} to user {user_id}")
                 
                 # Mark as sent
-                db.table("reminders").update({"is_sent": True}).eq("id", reminder_id).execute()
+                await execute_async(db.table("reminders").update({"is_sent": True}).eq("id", reminder_id))
                 
             except Exception as dm_error:
                 # User might have DMs disabled
@@ -82,7 +81,7 @@ class ReminderScheduler:
                 
                 # Still mark as sent to avoid infinite retries
                 # In a production system, you might want to log this differently
-                db.table("reminders").update({"is_sent": True}).eq("id", reminder_id).execute()
+                await execute_async(db.table("reminders").update({"is_sent": True}).eq("id", reminder_id))
         
         except Exception as e:
             print(f"Error sending reminder {reminder.get('id', 'unknown')}: {e}")
