@@ -1,3 +1,4 @@
+import asyncio
 from supabase import create_client, Client
 from .config import config
 
@@ -15,3 +16,7 @@ class Database:
 
 # Global instance
 db = Database().get_client()
+
+async def execute_async(query_builder):
+    """Executes a Supabase query asynchronously."""
+    return await asyncio.to_thread(query_builder.execute)
