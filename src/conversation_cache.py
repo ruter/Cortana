@@ -135,6 +135,10 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    file_lock: asyncio.Lock = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.file_lock = asyncio.Lock()
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -294,7 +298,8 @@ class ConversationCache:
     def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
         """Synchronous save for executor."""
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            # Save compact JSON for performance
+            json.dump(data, f, ensure_ascii=False)
 
     async def _save_to_file(self, state: ConversationState) -> None:
         """Save conversation state to file."""
@@ -370,7 +375,7 @@ class ConversationCache:
         """
         state = await self.get_or_create(user_id)
         
-        async with self._lock:
+        async with state.file_lock:
             # Calculate token count
             model = model or config.LLM_MODEL_NAME
             tokens = token_count(model, text=content)
@@ -419,7 +424,7 @@ class ConversationCache:
         threshold = int(context_limit * self.token_threshold)
         
         # Recalculate tokens
-        async with self._lock:
+        async with state.file_lock:
             current_tokens = state.calculate_tokens(model)
         
         # Check if compaction is needed
@@ -427,8 +432,9 @@ class ConversationCache:
             logger.info(f"Token threshold exceeded ({current_tokens}/{threshold}), compacting...")
             await self._compact(user_id, model)
         
-        state.touch()
-        return state.get_openai_messages()
+        async with state.file_lock:
+            state.touch()
+            return state.get_openai_messages()
     
     async def _compact(self, user_id: str, model: str) -> None:
         """
@@ -439,14 +445,14 @@ class ConversationCache:
         3. Store summary as compact_summary
         4. Reset TTL
         """
-        async with self._lock:
-            state = self._cache.get(user_id)
-            if not state or len(state.messages) <= self.keep_recent * 2:
+        state = await self.get_or_create(user_id)
+
+        async with state.file_lock:
+            if len(state.messages) <= self.keep_recent * 2:
                 return
             
             # Prepare messages for summarization
             messages_to_summarize = state.messages[:-self.keep_recent * 2]
-            recent_messages = state.messages[-self.keep_recent * 2:]
             
             # Build conversation text for summary
             conversation_text = ""
@@ -456,25 +462,32 @@ class ConversationCache:
             for msg in messages_to_summarize:
                 role_label = "User" if msg.role == "user" else "Assistant"
                 conversation_text += f"{role_label}: {msg.content}\n\n"
+
+            first_msg_to_remove = messages_to_summarize[0] if messages_to_summarize else None
+            count_to_remove = len(messages_to_summarize)
         
         # Generate summary (outside lock to avoid blocking)
         summary = await self._generate_summary(conversation_text, model)
         
-        async with self._lock:
-            state = self._cache.get(user_id)
-            if not state:
-                return
+        async with state.file_lock:
+            # Check if we can safely remove messages
+            if (first_msg_to_remove and
+                state.messages and
+                state.messages[0] is first_msg_to_remove and
+                len(state.messages) >= count_to_remove):
             
-            # Update state
-            state.compact_summary = summary
-            state.messages = recent_messages
-            state.touch()
-            
-            # Recalculate tokens
-            state.calculate_tokens(model)
-            
-            # Save to file
-            await self._save_to_file(state)
+                # Update state
+                state.compact_summary = summary
+                state.messages = state.messages[count_to_remove:]
+                state.touch()
+
+                # Recalculate tokens
+                state.calculate_tokens(model)
+
+                # Save to file
+                await self._save_to_file(state)
+            else:
+                logger.warning(f"State changed during compaction for user {user_id}, aborting update")
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
@@ -530,7 +543,9 @@ Conversation history:
         async with self._lock:
             if user_id in self._cache:
                 del self._cache[user_id]
-            await self._delete_file(user_id)
+
+        # Delete file outside lock to avoid blocking other users
+        await self._delete_file(user_id)
         
         logger.info(f"Cleared conversation cache for user {user_id}")
     
@@ -549,7 +564,10 @@ Conversation history:
             
             for user_id in expired:
                 del self._cache[user_id]
-                await self._delete_file(user_id)
+
+        # Delete files outside lock
+        for user_id in expired:
+            await self._delete_file(user_id)
         
         if expired:
             logger.info(f"Cleaned up {len(expired)} expired conversations")
