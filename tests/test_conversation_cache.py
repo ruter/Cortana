@@ -258,7 +258,9 @@ class TestConversationCache:
         # Mock to simulate exceeding threshold
         with patch("src.conversation_cache.token_count", return_value=100000):
             with patch("src.conversation_cache.get_model_context_limit", return_value=200000):
-                with patch.object(cache, "_compact", new_callable=AsyncMock) as mock_compact:
+                # We now inline compaction logic, so we check if _generate_summary is called
+                with patch.object(cache, "_generate_summary", new_callable=AsyncMock) as mock_summary:
+                    mock_summary.return_value = "Summary"
                     # Add many messages
                     for i in range(10):
                         await cache.add_message("user123", "user", f"Message {i}")
@@ -267,7 +269,7 @@ class TestConversationCache:
                     # This should trigger compaction
                     await cache.get_history("user123", model="gpt-4o")
                     
-                    mock_compact.assert_called()
+                    mock_summary.assert_called()
 
 
 class TestCompaction:
@@ -311,8 +313,22 @@ class TestCompaction:
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Compacted summary"
         
-        with patch("src.conversation_cache.rotating_completion", new_callable=AsyncMock, return_value=mock_response):
-            await cache._compact("user123", "gpt-4o")
+        # We need to force compaction by mocking a high token count during get_history check
+        # and mocking context limit to be low relative to that
+
+        # Limit = 200, Threshold = 160.
+        # Current tokens > 160 triggers compaction.
+        with patch("src.conversation_cache.get_model_context_limit", return_value=200):
+            # We also need token_count to return high value during calculate_tokens inside get_history
+            # But we added messages with token_count=10 previously.
+            # calculate_tokens re-sums them. 20 messages * 10 = 200 tokens.
+            # 200 > 160 (0.8 * 200). So compaction should trigger!
+
+            # HOWEVER, to be absolutely sure, we mock token_count to a high value (20 per msg)
+            # 20 msgs * 20 tokens = 400 tokens > 160.
+            with patch("src.conversation_cache.token_count", return_value=20):
+                with patch("src.conversation_cache.rotating_completion", new_callable=AsyncMock, return_value=mock_response):
+                    await cache.get_history("user123", "gpt-4o")
         
         state = await cache.get_or_create("user123")
         
