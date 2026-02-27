@@ -323,6 +323,44 @@ class TestCompaction:
         assert state.messages[0].content == "User message 8"
         assert state.messages[-1].content == "Assistant response 9"
 
+    @pytest.mark.asyncio
+    async def test_summary_tokens_caching(self, cache):
+        """Test that summary token count is cached and reused."""
+        state = await cache.get_or_create("user_summary_test")
+        state.compact_summary = "This is a summary."
+
+        # First calculation should call token_count
+        with patch("src.conversation_cache.token_count", return_value=5) as mock_count:
+            total = state.calculate_tokens("gpt-4o")
+            assert total == 5
+            assert state.summary_tokens == 5
+            mock_count.assert_called_once()
+
+        # Second calculation should use cached value
+        with patch("src.conversation_cache.token_count", return_value=5) as mock_count:
+            total = state.calculate_tokens("gpt-4o")
+            assert total == 5
+            assert state.summary_tokens == 5
+            mock_count.assert_not_called()
+
+        # Serialization should include summary_tokens
+        json_data = state.to_json()
+        assert json_data["summary_tokens"] == 5
+
+        # Deserialization should restore summary_tokens
+        restored = ConversationState.from_json(json_data)
+        assert restored.summary_tokens == 5
+
+        # Resetting summary (e.g. during compaction) should clear cache
+        state.compact_summary = "New summary"
+        state.summary_tokens = 0
+
+        with patch("src.conversation_cache.token_count", return_value=10) as mock_count:
+            total = state.calculate_tokens("gpt-4o")
+            assert total == 10
+            assert state.summary_tokens == 10
+            mock_count.assert_called_once()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
