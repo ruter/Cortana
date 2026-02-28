@@ -128,6 +128,7 @@ class ConversationState:
         last_activity: Timestamp of last activity (for TTL).
         ttl_seconds: Time-to-live in seconds.
         total_tokens: Cached total token count.
+        summary_tokens: Cached token count for the compact_summary.
     """
     user_id: str
     messages: List[CachedMessage] = field(default_factory=list)
@@ -135,6 +136,7 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +170,9 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            if self.summary_tokens == 0:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,6 +191,7 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
     
     @classmethod
@@ -199,6 +204,7 @@ class ConversationState:
             last_activity=datetime.fromisoformat(data.get("last_activity", datetime.now().isoformat())),
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
+            summary_tokens=data.get("summary_tokens", 0),
         )
 
 
@@ -467,6 +473,7 @@ class ConversationCache:
             
             # Update state
             state.compact_summary = summary
+            state.summary_tokens = 0  # Reset so it gets recalculated
             state.messages = recent_messages
             state.touch()
             
