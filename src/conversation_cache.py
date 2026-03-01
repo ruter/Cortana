@@ -135,6 +135,8 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    _last_summary: Optional[str] = None
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +170,13 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            if self.summary_tokens == 0 or self._last_summary != self.compact_summary:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = self.compact_summary
+            total += self.summary_tokens
+        else:
+            self.summary_tokens = 0
+            self._last_summary = None
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,19 +195,23 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
     
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "ConversationState":
         """Create from JSON data."""
-        return cls(
+        state = cls(
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
             last_activity=datetime.fromisoformat(data.get("last_activity", datetime.now().isoformat())),
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
+            summary_tokens=data.get("summary_tokens", 0),
         )
+        state._last_summary = state.compact_summary
+        return state
 
 
 class ConversationCache:
