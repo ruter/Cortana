@@ -135,6 +135,7 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    _file_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -303,8 +304,9 @@ class ConversationCache:
             return
         
         try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
+            async with state._file_lock:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._sync_save, path, state.to_json())
             logger.debug(f"Saved conversation state to file for user {state.user_id}")
         except Exception as e:
             logger.warning(f"Failed to save conversation to file: {e}")
@@ -386,8 +388,8 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+        # Save to file (outside global lock)
+        await self._save_to_file(state)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -473,8 +475,8 @@ class ConversationCache:
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+        # Save to file (outside global lock)
+        await self._save_to_file(state)
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
