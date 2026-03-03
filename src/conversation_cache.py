@@ -135,6 +135,10 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    file_lock: asyncio.Lock = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.file_lock = asyncio.Lock()
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -294,20 +298,21 @@ class ConversationCache:
     def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
         """Synchronous save for executor."""
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False)
 
-    async def _save_to_file(self, state: ConversationState) -> None:
+    async def _save_to_file(self, state: ConversationState, data: Dict[str, Any]) -> None:
         """Save conversation state to file."""
         path = self._get_persistence_path(state.user_id)
         if not path:
             return
         
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save conversation to file: {e}")
+        async with state.file_lock:
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._sync_save, path, data)
+                logger.debug(f"Saved conversation state to file for user {state.user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save conversation to file: {e}")
     
     def _sync_delete(self, path: Path) -> None:
         """Synchronous delete for executor."""
@@ -386,8 +391,11 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            # Capture state for persistence
+            snapshot = state.to_json()
+
+        # Save to file (outside lock)
+        await self._save_to_file(state, snapshot)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -473,8 +481,11 @@ class ConversationCache:
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Capture state
+            snapshot = state.to_json()
+
+        # Save to file (outside lock)
+        await self._save_to_file(state, snapshot)
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
