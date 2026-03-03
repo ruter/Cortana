@@ -136,6 +136,13 @@ class ConversationState:
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
     
+    # Concurrency control
+    _file_lock: asyncio.Lock = field(init=False, repr=False)
+    is_deleted: bool = field(default=False, init=False)
+
+    def __post_init__(self):
+        self._file_lock = asyncio.Lock()
+
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
         return datetime.now() > self.last_activity + timedelta(seconds=self.ttl_seconds)
@@ -281,7 +288,8 @@ class ConversationCache:
             
             # Check if loaded state is expired
             if state.is_expired():
-                await self._delete_file(user_id)
+                if path.exists():
+                    path.unlink()
                 return None
             
             logger.debug(f"Loaded conversation state from file for user {user_id}")
@@ -296,34 +304,27 @@ class ConversationCache:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    async def _save_to_file(self, state: ConversationState) -> None:
-        """Save conversation state to file."""
+    async def _save_state_snapshot(self, state: ConversationState, snapshot: Dict[str, Any]) -> None:
+        """
+        Save conversation snapshot to file with per-user locking.
+
+        This method should be called OUTSIDE the global lock.
+        It acquires the per-user file lock to ensure serial writes for that user.
+        """
         path = self._get_persistence_path(state.user_id)
         if not path:
             return
         
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
-        except Exception as e:
-            logger.warning(f"Failed to save conversation to file: {e}")
-    
-    def _sync_delete(self, path: Path) -> None:
-        """Synchronous delete for executor."""
-        if path.exists():
-            path.unlink()
+        async with state._file_lock:
+            if state.is_deleted:
+                return
 
-    async def _delete_file(self, user_id: str) -> None:
-        """Delete the persistence file for a user."""
-        path = self._get_persistence_path(user_id)
-        if path:
             try:
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self._sync_delete, path)
-                logger.debug(f"Deleted conversation file for user {user_id}")
+                await loop.run_in_executor(None, self._sync_save, path, snapshot)
+                logger.debug(f"Saved conversation state to file for user {state.user_id}")
             except Exception as e:
-                logger.warning(f"Failed to delete conversation file: {e}")
+                logger.warning(f"Failed to save conversation to file: {e}")
     
     async def get_or_create(self, user_id: str) -> ConversationState:
         """Get existing conversation or create new one."""
@@ -334,7 +335,11 @@ class ConversationCache:
                 if state.is_expired():
                     # Expired, remove and create new
                     del self._cache[user_id]
-                    await self._delete_file(user_id)
+
+                    # Synchronous delete inside lock
+                    path = self._get_persistence_path(user_id)
+                    if path and path.exists():
+                        path.unlink()
                 else:
                     return state
             
@@ -370,11 +375,11 @@ class ConversationCache:
         """
         state = await self.get_or_create(user_id)
         
+        # Calculate token count (outside lock for performance)
+        model = model or config.LLM_MODEL_NAME
+        tokens = token_count(model, text=content)
+
         async with self._lock:
-            # Calculate token count
-            model = model or config.LLM_MODEL_NAME
-            tokens = token_count(model, text=content)
-            
             # Create message
             msg = CachedMessage(
                 role=role,
@@ -386,8 +391,11 @@ class ConversationCache:
             state.total_tokens += tokens
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            # Snapshot for saving
+            snapshot = state.to_json()
+
+        # Save to file (outside lock, per-user serialization)
+        await self._save_state_snapshot(state, snapshot)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -473,8 +481,11 @@ class ConversationCache:
             # Recalculate tokens
             state.calculate_tokens(model)
             
-            # Save to file
-            await self._save_to_file(state)
+            # Create snapshot
+            snapshot = state.to_json()
+
+        # Save to file (outside lock)
+        await self._save_state_snapshot(state, snapshot)
         
         logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
     
@@ -529,8 +540,14 @@ Conversation history:
         """
         async with self._lock:
             if user_id in self._cache:
+                state = self._cache[user_id]
+                state.is_deleted = True
                 del self._cache[user_id]
-            await self._delete_file(user_id)
+
+            # Synchronous delete inside lock to prevent race conditions
+            path = self._get_persistence_path(user_id)
+            if path and path.exists():
+                path.unlink()
         
         logger.info(f"Cleared conversation cache for user {user_id}")
     
@@ -541,20 +558,29 @@ Conversation history:
         Returns:
             Number of conversations removed.
         """
+        removed_count = 0
+
         async with self._lock:
-            expired = [
+            expired_ids = [
                 user_id for user_id, state in self._cache.items()
                 if state.is_expired()
             ]
             
-            for user_id in expired:
+            for user_id in expired_ids:
+                state = self._cache[user_id]
+                state.is_deleted = True
                 del self._cache[user_id]
-                await self._delete_file(user_id)
+
+                # Synchronous delete inside lock
+                path = self._get_persistence_path(user_id)
+                if path and path.exists():
+                    path.unlink()
+                removed_count += 1
         
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired conversations")
+        if removed_count:
+            logger.info(f"Cleaned up {removed_count} expired conversations")
         
-        return len(expired)
+        return removed_count
     
     def get_stats(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
