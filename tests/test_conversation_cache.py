@@ -311,17 +311,51 @@ class TestCompaction:
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Compacted summary"
         
-        with patch("src.conversation_cache.rotating_completion", new_callable=AsyncMock, return_value=mock_response):
-            await cache._compact("user123", "gpt-4o")
-        
         state = await cache.get_or_create("user123")
         
+        with patch("src.conversation_cache.rotating_completion", new_callable=AsyncMock, return_value=mock_response):
+            await cache._compact(state, "gpt-4o")
+
         # Should keep only last 2 pairs (4 messages)
         assert len(state.messages) == 4
         assert state.compact_summary == "Compacted summary"
         # Verify the kept messages are the most recent ones
         assert state.messages[0].content == "User message 8"
         assert state.messages[-1].content == "Assistant response 9"
+
+    @pytest.mark.asyncio
+    async def test_compact_race_condition(self, cache):
+        """Test that new messages added during compaction are preserved."""
+        with patch("src.conversation_cache.token_count", return_value=10):
+            # Add 10 message pairs (total 20 messages)
+            for i in range(10):
+                await cache.add_message("user123", "user", f"User message {i}")
+                await cache.add_message("user123", "assistant", f"Assistant response {i}")
+
+        state = await cache.get_or_create("user123")
+
+        async def delayed_summary(*args, **kwargs):
+            # Add a new message while "generating summary"
+            # Note: add_message will acquire state._lock, so it will wait until _compact releases it
+            # _compact releases lock before calling _generate_summary, so this is fine.
+            with patch("src.conversation_cache.token_count", return_value=10):
+                await cache.add_message("user123", "user", "RACE MESSAGE")
+            return "Compacted summary"
+
+        with patch.object(cache, "_generate_summary", side_effect=delayed_summary):
+             await cache._compact(state, "gpt-4o")
+
+        # 20 messages originally.
+        # Keep recent 2 pairs = 4 messages.
+        # Summarize 16 messages.
+        # Add 1 message "RACE MESSAGE".
+        # Result should be: 4 recent + 1 new = 5 messages.
+
+        assert len(state.messages) == 5
+        assert state.compact_summary == "Compacted summary"
+        # Check content
+        assert state.messages[-1].content == "RACE MESSAGE"
+        assert state.messages[-2].content == "Assistant response 9"
 
 
 if __name__ == "__main__":
