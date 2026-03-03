@@ -7,6 +7,8 @@ and integration with the RotatingClient for resilient LLM access.
 """
 
 import logging
+import asyncio
+import functools
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -28,9 +30,9 @@ from .rotator_client import normalize_model_name, get_key_pool_status
 logger = logging.getLogger(__name__)
 
 
-def read_prompt_file(filename: str) -> str:
+def _read_prompt_file_sync(filename: str) -> str:
     """
-    Safely read a prompt file from the workspace directory.
+    Safely read a prompt file from the workspace directory (synchronous).
 
     Args:
         filename: Name of the file to read (e.g., 'IDENTITY.md').
@@ -49,12 +51,32 @@ def read_prompt_file(filename: str) -> str:
         return ""
 
 
-def _get_skills_prompt(user_id: str) -> str:
+async def read_prompt_file(filename: str) -> str:
+    """
+    Safely read a prompt file from the workspace directory (asynchronous).
+
+    Args:
+        filename: Name of the file to read (e.g., 'IDENTITY.md').
+
+    Returns:
+        File content as string, or empty string if file doesn't exist.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _read_prompt_file_sync, filename)
+
+
+async def _get_skills_prompt_async(user_id: str) -> str:
     """Generate the available skills section of the system prompt."""
     if not config.ENABLE_SKILLS:
         return ""
 
-    skills = load_all_skills(config.WORKSPACE_DIR, user_id)
+    loop = asyncio.get_running_loop()
+    # load_all_skills does directory scanning, so we run it in executor
+    skills = await loop.run_in_executor(
+        None,
+        functools.partial(load_all_skills, config.WORKSPACE_DIR, user_id)
+    )
+
     if not skills:
         return ""
 
@@ -89,10 +111,14 @@ async def dynamic_system_prompt(ctx: CortanaContext) -> str:
 
     zep_memory_context = ctx.deps.get("zep_memory_context", "No previous context.")
 
-    identity_content = read_prompt_file("IDENTITY.md")
-    soul_content = read_prompt_file("SOUL.md")
-    user_content = read_prompt_file("USER.md")
-    tools_content = read_prompt_file("TOOLS.md")
+    # Load prompt files concurrently
+    identity_content, soul_content, user_content, tools_content, skills_prompt = await asyncio.gather(
+        read_prompt_file("IDENTITY.md"),
+        read_prompt_file("SOUL.md"),
+        read_prompt_file("USER.md"),
+        read_prompt_file("TOOLS.md"),
+        _get_skills_prompt_async(user_id)
+    )
     
     workspace_dir = config.WORKSPACE_DIR
 
@@ -110,8 +136,6 @@ async def dynamic_system_prompt(ctx: CortanaContext) -> str:
         "- **Timezone:** (Loaded from config)",
         f"- **Timezone:** {config.DEFAULT_TIMEZONE}"
     )
-
-    skills_prompt = _get_skills_prompt(user_id)
 
     prompt = f"""
 {identity_content}

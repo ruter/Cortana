@@ -411,6 +411,7 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
 # Ported from badlogic/pi-mono mom package for Pi Coding Agent capabilities
 
 import asyncio
+import functools
 import os
 from pathlib import Path
 
@@ -534,18 +535,8 @@ async def execute_bash(ctx: CortanaContext, command: str, timeout: Optional[int]
         return f"Error executing command: {str(e)}"
 
 
-async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
-    """
-    Read file contents with optional line range.
-    
-    Args:
-        path: Path to the file to read (absolute or relative to workspace).
-        offset: Starting line number (1-indexed, optional).
-        limit: Number of lines to read from offset (optional).
-    
-    Returns:
-        File contents with line numbers for context.
-    """
+def _read_file_sync(path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
+    """Synchronous helper for reading files."""
     try:
         # Resolve path
         workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
@@ -615,19 +606,27 @@ async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None
         return f"Error reading file: {str(e)}"
 
 
-async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
+async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
     """
-    Create or overwrite a file with the given content.
-    
-    Parent directories will be created automatically if they don't exist.
+    Read file contents with optional line range.
     
     Args:
-        path: Path to the file to write (absolute or relative to workspace).
-        content: Content to write to the file.
+        path: Path to the file to read (absolute or relative to workspace).
+        offset: Starting line number (1-indexed, optional).
+        limit: Number of lines to read from offset (optional).
     
     Returns:
-        Confirmation message with file path and bytes written.
+        File contents with line numbers for context.
     """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_read_file_sync, path, offset, limit)
+    )
+
+
+def _write_file_sync(path: str, content: str) -> str:
+    """Synchronous helper for writing files."""
     try:
         # Resolve path
         workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
@@ -653,21 +652,28 @@ async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
         return f"Error writing file: {str(e)}"
 
 
-async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str) -> str:
+async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
     """
-    Make surgical edits to a file by replacing exact text matches.
+    Create or overwrite a file with the given content.
     
-    This tool finds the exact `old_text` in the file and replaces it with `new_text`.
-    Use this for small, targeted edits rather than rewriting entire files.
+    Parent directories will be created automatically if they don't exist.
     
     Args:
-        path: Path to the file to edit (absolute or relative to workspace).
-        old_text: Exact text to find and replace (must match exactly).
-        new_text: Replacement text.
+        path: Path to the file to write (absolute or relative to workspace).
+        content: Content to write to the file.
     
     Returns:
-        Confirmation with a preview of the changes made.
+        Confirmation message with file path and bytes written.
     """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_write_file_sync, path, content)
+    )
+
+
+def _edit_file_sync(path: str, old_text: str, new_text: str) -> str:
+    """Synchronous helper for editing files."""
     try:
         # Resolve path
         workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
@@ -716,3 +722,25 @@ async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str
         
     except Exception as e:
         return f"Error editing file: {str(e)}"
+
+
+async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str) -> str:
+    """
+    Make surgical edits to a file by replacing exact text matches.
+
+    This tool finds the exact `old_text` in the file and replaces it with `new_text`.
+    Use this for small, targeted edits rather than rewriting entire files.
+
+    Args:
+        path: Path to the file to edit (absolute or relative to workspace).
+        old_text: Exact text to find and replace (must match exactly).
+        new_text: Replacement text.
+
+    Returns:
+        Confirmation with a preview of the changes made.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(_edit_file_sync, path, old_text, new_text)
+    )
