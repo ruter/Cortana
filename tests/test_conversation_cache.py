@@ -207,6 +207,9 @@ class TestConversationCache:
         with patch("src.conversation_cache.token_count", return_value=10):
             await cache.add_message("user123", "user", "Hello!")
         
+        # Ensure message is saved before clearing (although clear handles locking correctly)
+        await cache.await_all_background_tasks()
+
         await cache.clear("user123")
         
         history = await cache.get_history("user123")
@@ -222,6 +225,9 @@ class TestConversationCache:
         with patch("src.conversation_cache.token_count", return_value=10):
             await cache1.add_message("user123", "user", "Persisted message")
         
+        # Wait for background save to complete
+        await cache1.await_all_background_tasks()
+
         # Create new cache instance (simulating restart)
         cache2 = ConversationCache(persistence_dir=temp_dir)
         
@@ -229,6 +235,22 @@ class TestConversationCache:
         
         assert len(state.messages) == 1
         assert state.messages[0].content == "Persisted message"
+
+    @pytest.mark.asyncio
+    async def test_add_message_async_behavior(self, cache):
+        """Verify that add_message creates a background task."""
+        with patch("src.conversation_cache.token_count", return_value=10):
+            await cache.add_message("user123", "user", "Hello!")
+
+        # Should have at least one background task
+        assert len(cache._background_tasks) > 0
+
+        # Wait for it
+        await cache.await_all_background_tasks()
+
+        # Should be done
+        pending = {t for t in cache._background_tasks if not t.done()}
+        assert len(pending) == 0
     
     @pytest.mark.asyncio
     async def test_cleanup_expired(self, cache):
