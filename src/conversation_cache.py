@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
 from .rotator_client import token_count, rotating_completion, normalize_model_name
@@ -135,6 +135,8 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    _last_summary: Optional[Tuple[str, str]] = field(default=None, repr=False, init=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +170,12 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            # ⚡ Bolt: Cache summary token count, invalidate if summary text or model changes
+            cache_key = (self.compact_summary, model)
+            if self._last_summary != cache_key:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = cache_key
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,19 +194,28 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
     
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "ConversationState":
         """Create from JSON data."""
-        return cls(
+        instance = cls(
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
             last_activity=datetime.fromisoformat(data.get("last_activity", datetime.now().isoformat())),
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
+            summary_tokens=data.get("summary_tokens", 0),
         )
+        # If legacy data lacked 'summary_tokens', leave _last_summary as None so it gets calculated
+        if "summary_tokens" in data and instance.compact_summary:
+            # We don't have the original model in the JSON, so this is a best-effort
+            # restoration for identical models. If the model differs on next use,
+            # calculate_tokens will properly invalidate and re-calculate.
+            instance._last_summary = (instance.compact_summary, config.LLM_MODEL_NAME)
+        return instance
 
 
 class ConversationCache:
