@@ -36,18 +36,30 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+# In-memory cache for user IDs to minimize database roundtrips
+_known_user_ids = set()
+
 async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+    """Ensure user exists in user_settings table, utilizing an in-memory cache to prevent redundant queries."""
+    if user_id in _known_user_ids:
+        return
+
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+
+        # Add to local cache once confirmed or created
+        _known_user_ids.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+        else:
+            # Even if it's a duplicate, it means the user exists
+            _known_user_ids.add(user_id)
 
 # --- Transaction Tools ---
 
