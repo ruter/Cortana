@@ -135,6 +135,8 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    _last_summary: Optional[tuple[str, str]] = None  # (summary_text, model_name) for cache invalidation
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +170,11 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            # Re-calculate summary tokens only if the summary text or model has changed
+            if not self._last_summary or self._last_summary != (self.compact_summary, model):
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = (self.compact_summary, model)
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -180,19 +186,24 @@ class ConversationState:
     
     def to_json(self) -> Dict[str, Any]:
         """Convert to JSON-serializable format."""
-        return {
+        result = {
             "user_id": self.user_id,
             "messages": [m.to_json() for m in self.messages],
             "compact_summary": self.compact_summary,
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
+        if self._last_summary:
+            result["_last_summary_text"] = self._last_summary[0]
+            result["_last_summary_model"] = self._last_summary[1]
+        return result
     
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "ConversationState":
         """Create from JSON data."""
-        return cls(
+        obj = cls(
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
@@ -200,6 +211,13 @@ class ConversationState:
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
         )
+        obj.summary_tokens = data.get("summary_tokens", 0)
+
+        # Safely restore internal cache invalidation state if present
+        if "_last_summary_text" in data and "_last_summary_model" in data:
+            obj._last_summary = (data["_last_summary_text"], data["_last_summary_model"])
+
+        return obj
 
 
 class ConversationCache:
@@ -294,7 +312,7 @@ class ConversationCache:
     def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
         """Synchronous save for executor."""
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False)
 
     async def _save_to_file(self, state: ConversationState) -> None:
         """Save conversation state to file."""
