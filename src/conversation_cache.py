@@ -128,6 +128,7 @@ class ConversationState:
         last_activity: Timestamp of last activity (for TTL).
         ttl_seconds: Time-to-live in seconds.
         total_tokens: Cached total token count.
+        summary_tokens: Cached token count of the compact summary.
     """
     user_id: str
     messages: List[CachedMessage] = field(default_factory=list)
@@ -135,6 +136,10 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+
+    # Internal field to track when the summary token cache needs invalidation
+    _last_summary: Optional[tuple[str, str]] = field(default=None, repr=False, compare=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +173,14 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            # Recompute summary tokens only if the summary text or model has changed
+            if not self._last_summary or self._last_summary != (self.compact_summary, model):
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = (self.compact_summary, model)
+            total += self.summary_tokens
+        else:
+            self.summary_tokens = 0
+            self._last_summary = None
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,19 +199,31 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
     
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "ConversationState":
         """Create from JSON data."""
-        return cls(
+        state = cls(
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
             last_activity=datetime.fromisoformat(data.get("last_activity", datetime.now().isoformat())),
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
+            summary_tokens=data.get("summary_tokens", 0),
         )
+
+        # If we loaded a cached token count and summary, set up the internal tracker
+        # so we don't unnecessarily recompute it on the first check. (We don't know the model
+        # it was computed with, but we can assume it's the current model until the summary changes)
+        if state.compact_summary and state.summary_tokens > 0:
+            # We use a placeholder for the model name here; it will be recomputed if a different
+            # model is passed to calculate_tokens.
+            state._last_summary = (state.compact_summary, config.LLM_MODEL_NAME)
+
+        return state
 
 
 class ConversationCache:
