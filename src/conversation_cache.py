@@ -135,6 +135,9 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    is_compacting: bool = False
+    _last_summary: Optional[tuple[str, str]] = field(default=None, init=False, repr=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +171,15 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            # Re-calculate only if summary or model has changed
+            current_summary_info = (self.compact_summary, model)
+            if getattr(self, '_last_summary', None) != current_summary_info:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = current_summary_info
+            total += self.summary_tokens
+        else:
+            self.summary_tokens = 0
+            self._last_summary = None
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,12 +198,13 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
     
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "ConversationState":
         """Create from JSON data."""
-        return cls(
+        obj = cls(
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
@@ -200,6 +212,13 @@ class ConversationState:
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
         )
+        if "summary_tokens" in data:
+            obj.summary_tokens = data["summary_tokens"]
+            if obj.compact_summary:
+                # We do not have the model used for previous summarization, but it's fine
+                # to mock it here as it will just be recalculated when `model` changes.
+                obj._last_summary = (obj.compact_summary, "unknown")
+        return obj
 
 
 class ConversationCache:
@@ -294,7 +313,7 @@ class ConversationCache:
     def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
         """Synchronous save for executor."""
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False)
 
     async def _save_to_file(self, state: ConversationState) -> None:
         """Save conversation state to file."""
@@ -441,12 +460,14 @@ class ConversationCache:
         """
         async with self._lock:
             state = self._cache.get(user_id)
-            if not state or len(state.messages) <= self.keep_recent * 2:
+            if not state or state.is_compacting or len(state.messages) <= self.keep_recent * 2:
                 return
             
+            state.is_compacting = True
+
             # Prepare messages for summarization
             messages_to_summarize = state.messages[:-self.keep_recent * 2]
-            recent_messages = state.messages[-self.keep_recent * 2:]
+            num_summarized = len(messages_to_summarize)
             
             # Build conversation text for summary
             conversation_text = ""
@@ -458,25 +479,31 @@ class ConversationCache:
                 conversation_text += f"{role_label}: {msg.content}\n\n"
         
         # Generate summary (outside lock to avoid blocking)
-        summary = await self._generate_summary(conversation_text, model)
-        
-        async with self._lock:
-            state = self._cache.get(user_id)
-            if not state:
-                return
+        try:
+            summary = await self._generate_summary(conversation_text, model)
             
-            # Update state
-            state.compact_summary = summary
-            state.messages = recent_messages
-            state.touch()
+            async with self._lock:
+                state = self._cache.get(user_id)
+                if not state:
+                    return
+
+                # Update state
+                state.compact_summary = summary
+                state.messages = state.messages[num_summarized:]
+                state.touch()
+
+                # Recalculate tokens
+                state.calculate_tokens(model)
+
+                # Save to file
+                await self._save_to_file(state)
             
-            # Recalculate tokens
-            state.calculate_tokens(model)
-            
-            # Save to file
-            await self._save_to_file(state)
-        
-        logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
+            logger.info(f"Compacted conversation for user {user_id}: {num_summarized} messages summarized")
+        finally:
+            async with self._lock:
+                state = self._cache.get(user_id)
+                if state:
+                    state.is_compacting = False
     
     async def _generate_summary(self, conversation_text: str, model: str) -> str:
         """
