@@ -213,23 +213,19 @@ class TestBackwardCompatibility:
     
     def test_old_model_format_works(self):
         """Test that old model format (without provider) still works."""
-        from src.agent import _get_model_spec
         from src.rotator_client import normalize_model_name
         
         # Old format should be converted correctly
         old_formats = [
-            ("gpt-4o", "openai:gpt-4o"),
-            ("gpt-4-turbo", "openai:gpt-4-turbo"),
-            ("gemini-1.5-pro", "google:gemini-1.5-pro"),
-            ("claude-3-sonnet", "anthropic:claude-3-sonnet"),
+            ("gpt-4o", "openai/gpt-4o"),
+            ("gpt-4-turbo", "openai/gpt-4-turbo"),
+            ("gemini-1.5-pro", "gemini/gemini-1.5-pro"),
+            ("claude-3-sonnet", "anthropic/claude-3-sonnet"),
         ]
         
         for old_format, expected_spec in old_formats:
-            assert _get_model_spec(old_format) == expected_spec
-            
-            # normalize_model_name should also work
             normalized = normalize_model_name(old_format)
-            assert "/" in normalized
+            assert normalized == expected_spec
     
     def test_settings_model_command_accepts_old_format(self):
         """Test that /settings model command accepts old format."""
@@ -301,7 +297,7 @@ class TestRotatorClientSingleton:
             with patch.dict('sys.modules', {'rotator_library': None}):
                 with patch('builtins.__import__', side_effect=ImportError("No module named 'rotator_library'")):
                     # This should handle the ImportError gracefully
-                    client = await get_rotating_client()
+                    client = await rc.get_rotating_client()
                     # May return None or raise - depends on implementation
         except ImportError:
             pass  # Expected in some cases
@@ -328,16 +324,16 @@ class TestKeyPoolStatus:
     async def test_get_key_pool_status(self):
         """Test retrieving key pool status."""
         from src.rotator_client import get_key_pool_status
-        from src.config import Config
+        from src.config import config
         
         # Set up test keys
-        Config.ROTATOR_API_KEYS = {
+        config.ROTATOR_API_KEYS = {
             "openai": ["key1", "key2"],
             "gemini": ["key3"],
         }
-        Config.ROTATOR_OAUTH_CREDENTIALS = {}
-        Config.ENABLE_ROTATOR = True
-        Config.LLM_MODEL_NAME = "gpt-4o"
+        config.ROTATOR_OAUTH_CREDENTIALS = {}
+        config.ENABLE_ROTATOR = True
+        config.LLM_MODEL_NAME = "gpt-4o"
         
         status = await get_key_pool_status()
         
@@ -539,30 +535,30 @@ class TestAgentIntegration:
     
     def test_get_model_spec(self):
         """Test model specification generation for PydanticAI."""
-        from src.agent import _get_model_spec
+        from src.rotator_client import normalize_model_name
         
         # OpenAI models
-        assert _get_model_spec("gpt-4o") == "openai:gpt-4o"
-        assert _get_model_spec("openai/gpt-4o") == "openai:gpt-4o"
+        assert normalize_model_name("gpt-4o") == "openai/gpt-4o"
+        assert normalize_model_name("openai/gpt-4o") == "openai/gpt-4o"
         
         # Gemini models
-        assert _get_model_spec("gemini-2.5-flash") == "google:gemini-2.5-flash"
-        assert _get_model_spec("gemini/gemini-2.5-flash") == "google:gemini-2.5-flash"
+        assert normalize_model_name("gemini-2.5-flash") == "gemini/gemini-2.5-flash"
+        assert normalize_model_name("gemini/gemini-2.5-flash") == "gemini/gemini-2.5-flash"
         
         # Anthropic models
-        assert _get_model_spec("claude-3-sonnet") == "anthropic:claude-3-sonnet"
-        assert _get_model_spec("anthropic/claude-3-sonnet") == "anthropic:claude-3-sonnet"
+        assert normalize_model_name("claude-3-sonnet") == "anthropic/claude-3-sonnet"
+        assert normalize_model_name("anthropic/claude-3-sonnet") == "anthropic/claude-3-sonnet"
     
     def test_get_model_spec_edge_cases(self):
         """Test model specification for edge cases."""
-        from src.agent import _get_model_spec
+        from src.rotator_client import normalize_model_name
         
         # O-series models
-        assert _get_model_spec("o1-preview") == "openai:o1-preview"
-        assert _get_model_spec("o3-mini") == "openai:o3-mini"
+        assert normalize_model_name("o1-preview") == "openai/o1-preview"
+        assert normalize_model_name("o3-mini") == "openai/o3-mini"
         
         # Unknown provider defaults to openai
-        assert _get_model_spec("custom-model") == "openai:custom-model"
+        assert normalize_model_name("custom-model") == "openai/custom-model"
 
 
 class TestTokenCounting:
