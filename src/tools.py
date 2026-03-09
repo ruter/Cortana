@@ -555,24 +555,35 @@ async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None
         # Security check - ensure path is within allowed directories
         real_path = os.path.realpath(path)
         
-        if not os.path.exists(real_path):
-            return f"Error: File not found: {path}"
+        loop = asyncio.get_running_loop()
         
-        if not os.path.isfile(real_path):
-            return f"Error: Path is not a file: {path}"
+        # Performance optimization: Execute blocking synchronous file I/O operations
+        # (os.path.exists, open, read, readlines) in a separate thread pool using run_in_executor.
+        # This prevents blocking the main asyncio event loop, significantly improving
+        # concurrent performance when reading large files.
+        def _check_and_read():
+            if not os.path.exists(real_path):
+                return f"Error: File not found: {path}", None
+
+            if not os.path.isfile(real_path):
+                return f"Error: Path is not a file: {path}", None
+
+            # Check if file is binary
+            try:
+                with open(real_path, 'rb') as f:
+                    chunk = f.read(8192)
+                    if b'\x00' in chunk:
+                        return f"Error: Cannot read binary file: {path}", None
+            except Exception as e:
+                return f"Error checking file: {str(e)}", None
+
+            # Read file
+            with open(real_path, 'r', encoding='utf-8', errors='replace') as f:
+                return None, f.readlines()
         
-        # Check if file is binary
-        try:
-            with open(real_path, 'rb') as f:
-                chunk = f.read(8192)
-                if b'\x00' in chunk:
-                    return f"Error: Cannot read binary file: {path}"
-        except Exception as e:
-            return f"Error checking file: {str(e)}"
-        
-        # Read file
-        with open(real_path, 'r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
+        error_msg, lines = await loop.run_in_executor(None, _check_and_read)
+        if error_msg is not None:
+            return error_msg
         
         total_lines = len(lines)
         
@@ -636,16 +647,25 @@ async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
         
         real_path = os.path.realpath(path)
         
-        # Create parent directories if needed
-        parent_dir = os.path.dirname(real_path)
-        if parent_dir and not os.path.exists(parent_dir):
-            os.makedirs(parent_dir, exist_ok=True)
+        loop = asyncio.get_running_loop()
         
-        # Write file
-        with open(real_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        bytes_written = len(content.encode('utf-8'))
+        # Performance optimization: Execute blocking synchronous file I/O operations
+        # (os.makedirs, open, write) in a separate thread pool using run_in_executor.
+        # This prevents blocking the main asyncio event loop, significantly improving
+        # concurrent performance when writing large files.
+        def _write():
+            # Create parent directories if needed
+            parent_dir = os.path.dirname(real_path)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+
+            # Write file
+            with open(real_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            return len(content.encode('utf-8'))
+
+        bytes_written = await loop.run_in_executor(None, _write)
         
         return f"File written: {path} ({_format_size(bytes_written)})"
         
@@ -676,15 +696,26 @@ async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str
         
         real_path = os.path.realpath(path)
         
-        if not os.path.exists(real_path):
-            return f"Error: File not found: {path}"
+        loop = asyncio.get_running_loop()
         
-        if not os.path.isfile(real_path):
-            return f"Error: Path is not a file: {path}"
-        
-        # Read current content
-        with open(real_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+        # Performance optimization: Execute blocking synchronous file I/O operations
+        # (open, read, write) in a separate thread pool using run_in_executor.
+        # This prevents blocking the main asyncio event loop, significantly improving
+        # concurrent performance when reading and writing files.
+        def _read():
+            if not os.path.exists(real_path):
+                return f"Error: File not found: {path}", None
+
+            if not os.path.isfile(real_path):
+                return f"Error: Path is not a file: {path}", None
+
+            # Read current content
+            with open(real_path, 'r', encoding='utf-8') as f:
+                return None, f.read()
+
+        error_msg, content = await loop.run_in_executor(None, _read)
+        if error_msg is not None:
+            return error_msg
         
         # Check if old_text exists
         if old_text not in content:
@@ -699,9 +730,12 @@ async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str
         # Perform replacement
         new_content = content.replace(old_text, new_text)
         
-        # Write back
-        with open(real_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
+        def _write():
+            # Write back
+            with open(real_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+        await loop.run_in_executor(None, _write)
         
         # Generate diff preview
         old_preview = old_text[:100] + "..." if len(old_text) > 100 else old_text
