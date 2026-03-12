@@ -11,10 +11,7 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
 # Import the tools module
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
-from tools import (
+from src.tools import (
     execute_bash,
     read_file,
     write_file,
@@ -93,7 +90,7 @@ class TestExecuteBash:
     @pytest.mark.asyncio
     async def test_simple_command(self, mock_ctx):
         """Test executing a simple echo command."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             mock_config.BASH_TIMEOUT_DEFAULT = 60
             
@@ -103,7 +100,7 @@ class TestExecuteBash:
     @pytest.mark.asyncio
     async def test_command_with_exit_code(self, mock_ctx):
         """Test that non-zero exit codes are reported."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             mock_config.BASH_TIMEOUT_DEFAULT = 60
             
@@ -113,7 +110,7 @@ class TestExecuteBash:
     @pytest.mark.asyncio
     async def test_command_timeout(self, mock_ctx):
         """Test that commands timeout correctly."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             mock_config.BASH_TIMEOUT_DEFAULT = 60
             
@@ -123,7 +120,7 @@ class TestExecuteBash:
     @pytest.mark.asyncio
     async def test_command_with_stderr(self, mock_ctx):
         """Test that stderr is captured."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             mock_config.BASH_TIMEOUT_DEFAULT = 60
             
@@ -155,7 +152,7 @@ class TestReadFile:
     @pytest.mark.asyncio
     async def test_read_entire_file(self, mock_ctx, temp_file):
         """Test reading an entire file."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             mock_config.FILE_READ_MAX_LINES = 1000
             
@@ -166,7 +163,7 @@ class TestReadFile:
     @pytest.mark.asyncio
     async def test_read_with_offset(self, mock_ctx, temp_file):
         """Test reading with line offset."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             mock_config.FILE_READ_MAX_LINES = 1000
             
@@ -177,7 +174,7 @@ class TestReadFile:
     @pytest.mark.asyncio
     async def test_read_with_limit(self, mock_ctx, temp_file):
         """Test reading with line limit."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             mock_config.FILE_READ_MAX_LINES = 1000
             
@@ -189,7 +186,7 @@ class TestReadFile:
     @pytest.mark.asyncio
     async def test_read_nonexistent_file(self, mock_ctx):
         """Test reading a file that doesn't exist."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             
             result = await read_file(mock_ctx, "/nonexistent/file.txt")
@@ -203,7 +200,7 @@ class TestReadFile:
             temp_path = f.name
         
         try:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = '/tmp'
                 mock_config.FILE_READ_MAX_LINES = 1000
                 
@@ -228,7 +225,7 @@ class TestWriteFile:
     async def test_write_new_file(self, mock_ctx):
         """Test writing a new file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 
                 test_path = os.path.join(tmpdir, "test.txt")
@@ -243,7 +240,7 @@ class TestWriteFile:
     async def test_write_creates_directories(self, mock_ctx):
         """Test that parent directories are created."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 
                 test_path = os.path.join(tmpdir, "nested", "dir", "test.txt")
@@ -256,7 +253,7 @@ class TestWriteFile:
     async def test_write_overwrites_existing(self, mock_ctx):
         """Test that existing files are overwritten."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 
                 test_path = os.path.join(tmpdir, "test.txt")
@@ -288,7 +285,7 @@ class TestEditFile:
     async def test_edit_simple_replacement(self, mock_ctx):
         """Test simple text replacement."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 
                 test_path = os.path.join(tmpdir, "test.txt")
@@ -305,7 +302,7 @@ class TestEditFile:
     async def test_edit_text_not_found(self, mock_ctx):
         """Test error when text to replace is not found."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 
                 test_path = os.path.join(tmpdir, "test.txt")
@@ -320,7 +317,7 @@ class TestEditFile:
     async def test_edit_multiple_occurrences(self, mock_ctx):
         """Test that all occurrences are replaced."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 
                 test_path = os.path.join(tmpdir, "test.txt")
@@ -337,7 +334,7 @@ class TestEditFile:
     @pytest.mark.asyncio
     async def test_edit_nonexistent_file(self, mock_ctx):
         """Test editing a file that doesn't exist."""
-        with patch('tools.config') as mock_config:
+        with patch('src.tools.config') as mock_config:
             mock_config.WORKSPACE_DIR = '/tmp'
             
             result = await edit_file(mock_ctx, "/nonexistent/file.txt", "old", "new")
@@ -359,7 +356,7 @@ class TestCodingToolsIntegration:
     async def test_write_then_read(self, mock_ctx):
         """Test writing a file then reading it back."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 mock_config.FILE_READ_MAX_LINES = 1000
                 
@@ -380,7 +377,7 @@ class TestCodingToolsIntegration:
     async def test_write_edit_read(self, mock_ctx):
         """Test write -> edit -> read workflow."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('tools.config') as mock_config:
+            with patch('src.tools.config') as mock_config:
                 mock_config.WORKSPACE_DIR = tmpdir
                 mock_config.FILE_READ_MAX_LINES = 1000
                 
