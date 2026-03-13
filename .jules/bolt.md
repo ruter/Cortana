@@ -1,3 +1,3 @@
-## 2025-02-19 - Dependency Management in Optimization
-**Learning:** Even if a library is in `requirements.txt`, using `run_in_executor` with the standard library is preferred by some reviewers for file I/O to minimize dependencies and maintain simplicity.
-**Action:** Prefer standard library solutions (like `run_in_executor`) for async I/O over external libraries unless the external library offers significant additional value.
+## 2024-05-24 - Supabase Python Client Sync Methods Blocking Async Loop
+**Learning:** The Supabase Python client's `execute()` method is synchronous by default. When called frequently inside asynchronous tool functions (like `ensure_user_exists`), it can block the main asyncio event loop, severely degrading performance.
+**Action:** Use an in-memory cache (like a global `set`) to store the results of these synchronous checks to avoid hitting the database (and blocking the loop) on every subsequent call for the same user. Alternatively, wrap the synchronous calls in `asyncio.get_running_loop().run_in_executor()`.
