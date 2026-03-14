@@ -534,6 +534,67 @@ async def execute_bash(ctx: CortanaContext, command: str, timeout: Optional[int]
         return f"Error executing command: {str(e)}"
 
 
+def _sync_read_file(path: str, offset: Optional[int], limit: Optional[int], max_lines: int) -> str:
+    """Synchronous implementation of reading a file to be run in executor."""
+    # Security check - ensure path is within allowed directories
+    real_path = os.path.realpath(path)
+
+    if not os.path.exists(real_path):
+        return f"Error: File not found: {path}"
+
+    if not os.path.isfile(real_path):
+        return f"Error: Path is not a file: {path}"
+
+    # Check if file is binary
+    try:
+        with open(real_path, 'rb') as f:
+            chunk = f.read(8192)
+            if b'\x00' in chunk:
+                return f"Error: Cannot read binary file: {path}"
+    except Exception as e:
+        return f"Error checking file: {str(e)}"
+
+    # Read file
+    with open(real_path, 'r', encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+
+    total_lines = len(lines)
+
+    if total_lines == 0:
+        return f"File is empty: {path}"
+
+    # Apply offset and limit
+    start_idx = 0
+    end_idx = total_lines
+
+    if offset is not None:
+        start_idx = max(0, offset - 1)  # Convert to 0-indexed
+
+    if limit is not None:
+        end_idx = min(total_lines, start_idx + limit)
+
+    # Apply default limit if file is too large
+    if end_idx - start_idx > max_lines:
+        end_idx = start_idx + max_lines
+
+    selected_lines = lines[start_idx:end_idx]
+
+    # Format with line numbers
+    result_lines = []
+    for i, line in enumerate(selected_lines, start=start_idx + 1):
+        # Remove trailing newline for cleaner display
+        line_content = line.rstrip('\n\r')
+        result_lines.append(f"{i:4d} | {line_content}")
+
+    result = '\n'.join(result_lines)
+
+    # Add truncation notice if applicable
+    if end_idx < total_lines or start_idx > 0:
+        result += f"\n\n[Showing lines {start_idx + 1}-{end_idx} of {total_lines}]"
+
+    return result
+
+
 async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
     """
     Read file contents with optional line range.
@@ -552,67 +613,31 @@ async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None
         if not os.path.isabs(path):
             path = os.path.join(workspace, path)
         
-        # Security check - ensure path is within allowed directories
-        real_path = os.path.realpath(path)
-        
-        if not os.path.exists(real_path):
-            return f"Error: File not found: {path}"
-        
-        if not os.path.isfile(real_path):
-            return f"Error: Path is not a file: {path}"
-        
-        # Check if file is binary
-        try:
-            with open(real_path, 'rb') as f:
-                chunk = f.read(8192)
-                if b'\x00' in chunk:
-                    return f"Error: Cannot read binary file: {path}"
-        except Exception as e:
-            return f"Error checking file: {str(e)}"
-        
-        # Read file
-        with open(real_path, 'r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
-        
-        total_lines = len(lines)
-        
-        if total_lines == 0:
-            return f"File is empty: {path}"
-        
-        # Apply offset and limit
-        start_idx = 0
-        end_idx = total_lines
-        
-        if offset is not None:
-            start_idx = max(0, offset - 1)  # Convert to 0-indexed
-        
-        if limit is not None:
-            end_idx = min(total_lines, start_idx + limit)
-        
-        # Apply default limit if file is too large
         max_lines = config.FILE_READ_MAX_LINES if hasattr(config, 'FILE_READ_MAX_LINES') else 1000
-        if end_idx - start_idx > max_lines:
-            end_idx = start_idx + max_lines
         
-        selected_lines = lines[start_idx:end_idx]
-        
-        # Format with line numbers
-        result_lines = []
-        for i, line in enumerate(selected_lines, start=start_idx + 1):
-            # Remove trailing newline for cleaner display
-            line_content = line.rstrip('\n\r')
-            result_lines.append(f"{i:4d} | {line_content}")
-        
-        result = '\n'.join(result_lines)
-        
-        # Add truncation notice if applicable
-        if end_idx < total_lines or start_idx > 0:
-            result += f"\n\n[Showing lines {start_idx + 1}-{end_idx} of {total_lines}]"
-        
-        return result
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _sync_read_file, path, offset, limit, max_lines)
         
     except Exception as e:
         return f"Error reading file: {str(e)}"
+
+
+def _sync_write_file(path: str, content: str) -> str:
+    """Synchronous implementation of writing a file to be run in executor."""
+    real_path = os.path.realpath(path)
+
+    # Create parent directories if needed
+    parent_dir = os.path.dirname(real_path)
+    if parent_dir and not os.path.exists(parent_dir):
+        os.makedirs(parent_dir, exist_ok=True)
+
+    # Write file
+    with open(real_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    bytes_written = len(content.encode('utf-8'))
+
+    return f"File written: {path} ({_format_size(bytes_written)})"
 
 
 async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
@@ -634,23 +659,54 @@ async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
         if not os.path.isabs(path):
             path = os.path.join(workspace, path)
         
-        real_path = os.path.realpath(path)
-        
-        # Create parent directories if needed
-        parent_dir = os.path.dirname(real_path)
-        if parent_dir and not os.path.exists(parent_dir):
-            os.makedirs(parent_dir, exist_ok=True)
-        
-        # Write file
-        with open(real_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        bytes_written = len(content.encode('utf-8'))
-        
-        return f"File written: {path} ({_format_size(bytes_written)})"
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _sync_write_file, path, content)
         
     except Exception as e:
         return f"Error writing file: {str(e)}"
+
+
+def _sync_edit_file(path: str, old_text: str, new_text: str) -> str:
+    """Synchronous implementation of editing a file to be run in executor."""
+    real_path = os.path.realpath(path)
+
+    if not os.path.exists(real_path):
+        return f"Error: File not found: {path}"
+
+    if not os.path.isfile(real_path):
+        return f"Error: Path is not a file: {path}"
+
+    # Read current content
+    with open(real_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # Check if old_text exists
+    if old_text not in content:
+        # Provide helpful error message
+        if old_text.strip() in content:
+            return f"Error: Exact text not found. Note: The text exists but with different whitespace. Make sure `old_text` matches exactly including spaces and newlines."
+        return f"Error: Text to replace not found in file. Make sure `old_text` matches exactly."
+
+    # Count occurrences
+    occurrences = content.count(old_text)
+
+    # Perform replacement
+    new_content = content.replace(old_text, new_text)
+
+    # Write back
+    with open(real_path, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+
+    # Generate diff preview
+    old_preview = old_text[:100] + "..." if len(old_text) > 100 else old_text
+    new_preview = new_text[:100] + "..." if len(new_text) > 100 else new_text
+
+    result = f"File edited: {path}\n"
+    result += f"Replaced {occurrences} occurrence(s)\n\n"
+    result += f"**Before:**\n```\n{old_preview}\n```\n\n"
+    result += f"**After:**\n```\n{new_preview}\n```"
+
+    return result
 
 
 async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str) -> str:
@@ -673,46 +729,9 @@ async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str
         workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
         if not os.path.isabs(path):
             path = os.path.join(workspace, path)
-        
-        real_path = os.path.realpath(path)
-        
-        if not os.path.exists(real_path):
-            return f"Error: File not found: {path}"
-        
-        if not os.path.isfile(real_path):
-            return f"Error: Path is not a file: {path}"
-        
-        # Read current content
-        with open(real_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Check if old_text exists
-        if old_text not in content:
-            # Provide helpful error message
-            if old_text.strip() in content:
-                return f"Error: Exact text not found. Note: The text exists but with different whitespace. Make sure `old_text` matches exactly including spaces and newlines."
-            return f"Error: Text to replace not found in file. Make sure `old_text` matches exactly."
-        
-        # Count occurrences
-        occurrences = content.count(old_text)
-        
-        # Perform replacement
-        new_content = content.replace(old_text, new_text)
-        
-        # Write back
-        with open(real_path, 'w', encoding='utf-8') as f:
-            f.write(new_content)
-        
-        # Generate diff preview
-        old_preview = old_text[:100] + "..." if len(old_text) > 100 else old_text
-        new_preview = new_text[:100] + "..." if len(new_text) > 100 else new_text
-        
-        result = f"File edited: {path}\n"
-        result += f"Replaced {occurrences} occurrence(s)\n\n"
-        result += f"**Before:**\n```\n{old_preview}\n```\n\n"
-        result += f"**After:**\n```\n{new_preview}\n```"
-        
-        return result
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _sync_edit_file, path, old_text, new_text)
         
     except Exception as e:
         return f"Error editing file: {str(e)}"
