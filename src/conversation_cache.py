@@ -294,7 +294,7 @@ class ConversationCache:
     def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
         """Synchronous save for executor."""
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False)
 
     async def _save_to_file(self, state: ConversationState) -> None:
         """Save conversation state to file."""
