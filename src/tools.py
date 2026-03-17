@@ -534,21 +534,9 @@ async def execute_bash(ctx: CortanaContext, command: str, timeout: Optional[int]
         return f"Error executing command: {str(e)}"
 
 
-async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
-    """
-    Read file contents with optional line range.
-    
-    Args:
-        path: Path to the file to read (absolute or relative to workspace).
-        offset: Starting line number (1-indexed, optional).
-        limit: Number of lines to read from offset (optional).
-    
-    Returns:
-        File contents with line numbers for context.
-    """
+def _sync_read_file(path: str, offset: Optional[int] = None, limit: Optional[int] = None, workspace: str = '/workspace', max_lines_config: int = 1000) -> str:
     try:
         # Resolve path
-        workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
         if not os.path.isabs(path):
             path = os.path.join(workspace, path)
         
@@ -590,9 +578,8 @@ async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None
             end_idx = min(total_lines, start_idx + limit)
         
         # Apply default limit if file is too large
-        max_lines = config.FILE_READ_MAX_LINES if hasattr(config, 'FILE_READ_MAX_LINES') else 1000
-        if end_idx - start_idx > max_lines:
-            end_idx = start_idx + max_lines
+        if end_idx - start_idx > max_lines_config:
+            end_idx = start_idx + max_lines_config
         
         selected_lines = lines[start_idx:end_idx]
         
@@ -615,22 +602,32 @@ async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None
         return f"Error reading file: {str(e)}"
 
 
-async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
+async def read_file(ctx: CortanaContext, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> str:
     """
-    Create or overwrite a file with the given content.
-    
-    Parent directories will be created automatically if they don't exist.
+    Read file contents with optional line range.
     
     Args:
-        path: Path to the file to write (absolute or relative to workspace).
-        content: Content to write to the file.
+        path: Path to the file to read (absolute or relative to workspace).
+        offset: Starting line number (1-indexed, optional).
+        limit: Number of lines to read from offset (optional).
     
     Returns:
-        Confirmation message with file path and bytes written.
+        File contents with line numbers for context.
     """
+    workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
+    max_lines = config.FILE_READ_MAX_LINES if hasattr(config, 'FILE_READ_MAX_LINES') else 1000
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        _sync_read_file,
+        path, offset, limit, workspace, max_lines
+    )
+
+
+def _sync_write_file(path: str, content: str, workspace: str = '/workspace') -> str:
     try:
         # Resolve path
-        workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
         if not os.path.isabs(path):
             path = os.path.join(workspace, path)
         
@@ -652,25 +649,32 @@ async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
     except Exception as e:
         return f"Error writing file: {str(e)}"
 
-
-async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str) -> str:
+async def write_file(ctx: CortanaContext, path: str, content: str) -> str:
     """
-    Make surgical edits to a file by replacing exact text matches.
+    Create or overwrite a file with the given content.
     
-    This tool finds the exact `old_text` in the file and replaces it with `new_text`.
-    Use this for small, targeted edits rather than rewriting entire files.
+    Parent directories will be created automatically if they don't exist.
     
     Args:
-        path: Path to the file to edit (absolute or relative to workspace).
-        old_text: Exact text to find and replace (must match exactly).
-        new_text: Replacement text.
+        path: Path to the file to write (absolute or relative to workspace).
+        content: Content to write to the file.
     
     Returns:
-        Confirmation with a preview of the changes made.
+        Confirmation message with file path and bytes written.
     """
+    workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        _sync_write_file,
+        path, content, workspace
+    )
+
+
+def _sync_edit_file(path: str, old_text: str, new_text: str, workspace: str = '/workspace') -> str:
     try:
         # Resolve path
-        workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
         if not os.path.isabs(path):
             path = os.path.join(workspace, path)
         
@@ -716,3 +720,27 @@ async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str
         
     except Exception as e:
         return f"Error editing file: {str(e)}"
+
+async def edit_file(ctx: CortanaContext, path: str, old_text: str, new_text: str) -> str:
+    """
+    Make surgical edits to a file by replacing exact text matches.
+
+    This tool finds the exact `old_text` in the file and replaces it with `new_text`.
+    Use this for small, targeted edits rather than rewriting entire files.
+
+    Args:
+        path: Path to the file to edit (absolute or relative to workspace).
+        old_text: Exact text to find and replace (must match exactly).
+        new_text: Replacement text.
+
+    Returns:
+        Confirmation with a preview of the changes made.
+    """
+    workspace = config.WORKSPACE_DIR if hasattr(config, 'WORKSPACE_DIR') else '/workspace'
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        _sync_edit_file,
+        path, old_text, new_text, workspace
+    )
