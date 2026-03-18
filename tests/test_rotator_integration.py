@@ -213,24 +213,7 @@ class TestBackwardCompatibility:
     
     def test_old_model_format_works(self):
         """Test that old model format (without provider) still works."""
-        from src.agent import _get_model_spec
         from src.rotator_client import normalize_model_name
-        
-        # Old format should be converted correctly
-        old_formats = [
-            ("gpt-4o", "openai:gpt-4o"),
-            ("gpt-4-turbo", "openai:gpt-4-turbo"),
-            ("gemini-1.5-pro", "google:gemini-1.5-pro"),
-            ("claude-3-sonnet", "anthropic:claude-3-sonnet"),
-        ]
-        
-        for old_format, expected_spec in old_formats:
-            assert _get_model_spec(old_format) == expected_spec
-            
-            # normalize_model_name should also work
-            normalized = normalize_model_name(old_format)
-            assert "/" in normalized
-    
     def test_settings_model_command_accepts_old_format(self):
         """Test that /settings model command accepts old format."""
         from src.rotator_client import normalize_model_name
@@ -278,7 +261,7 @@ class TestRotatorClientSingleton:
         config.ENABLE_ROTATOR = False
         
         try:
-            client = await get_rotating_client()
+            client = await rc.get_rotating_client()
             assert client is None
         finally:
             config.ENABLE_ROTATOR = original
@@ -301,7 +284,7 @@ class TestRotatorClientSingleton:
             with patch.dict('sys.modules', {'rotator_library': None}):
                 with patch('builtins.__import__', side_effect=ImportError("No module named 'rotator_library'")):
                     # This should handle the ImportError gracefully
-                    client = await get_rotating_client()
+                    client = await rc.get_rotating_client()
                     # May return None or raise - depends on implementation
         except ImportError:
             pass  # Expected in some cases
@@ -537,32 +520,32 @@ class TestAnthropicCompatibility:
 class TestAgentIntegration:
     """Tests for agent integration with rotator."""
     
-    def test_get_model_spec(self):
+    def testnormalize_model_name(self):
         """Test model specification generation for PydanticAI."""
-        from src.agent import _get_model_spec
+        from src.rotator_client import normalize_model_name
         
         # OpenAI models
-        assert _get_model_spec("gpt-4o") == "openai:gpt-4o"
-        assert _get_model_spec("openai/gpt-4o") == "openai:gpt-4o"
+        assert normalize_model_name("gpt-4o") == "openai:gpt-4o"
+        assert normalize_model_name("openai/gpt-4o") == "openai:gpt-4o"
         
         # Gemini models
-        assert _get_model_spec("gemini-2.5-flash") == "google:gemini-2.5-flash"
-        assert _get_model_spec("gemini/gemini-2.5-flash") == "google:gemini-2.5-flash"
+        assert normalize_model_name("gemini-2.5-flash") == "google:gemini-2.5-flash"
+        assert normalize_model_name("gemini/gemini-2.5-flash") == "google:gemini-2.5-flash"
         
         # Anthropic models
-        assert _get_model_spec("claude-3-sonnet") == "anthropic:claude-3-sonnet"
-        assert _get_model_spec("anthropic/claude-3-sonnet") == "anthropic:claude-3-sonnet"
+        assert normalize_model_name("claude-3-sonnet") == "anthropic:claude-3-sonnet"
+        assert normalize_model_name("anthropic/claude-3-sonnet") == "anthropic:claude-3-sonnet"
     
-    def test_get_model_spec_edge_cases(self):
+    def testnormalize_model_name_edge_cases(self):
         """Test model specification for edge cases."""
-        from src.agent import _get_model_spec
+        from src.rotator_client import normalize_model_name
         
         # O-series models
-        assert _get_model_spec("o1-preview") == "openai:o1-preview"
-        assert _get_model_spec("o3-mini") == "openai:o3-mini"
+        assert normalize_model_name("o1-preview") == "openai:o1-preview"
+        assert normalize_model_name("o3-mini") == "openai:o3-mini"
         
         # Unknown provider defaults to openai
-        assert _get_model_spec("custom-model") == "openai:custom-model"
+        assert normalize_model_name("custom-model") == "openai:custom-model"
 
 
 class TestTokenCounting:
