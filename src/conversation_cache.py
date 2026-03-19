@@ -135,6 +135,8 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    _last_summary: Optional[tuple[str, str]] = field(default=None, repr=False, init=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +170,11 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            # Recompute summary tokens if the summary or model has changed
+            if getattr(self, "_last_summary", None) != (self.compact_summary, model):
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = (self.compact_summary, model)
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,12 +193,13 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": getattr(self, "summary_tokens", 0),
         }
     
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "ConversationState":
         """Create from JSON data."""
-        return cls(
+        obj = cls(
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
@@ -200,6 +207,12 @@ class ConversationState:
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
         )
+        obj.summary_tokens = data.get("summary_tokens", 0)
+        # Restore cache invalidation token if we have a summary and token count
+        if obj.compact_summary and obj.summary_tokens > 0:
+            # We don't know the exact model it was saved with, but it's safe to assume config.LLM_MODEL_NAME
+            obj._last_summary = (obj.compact_summary, config.LLM_MODEL_NAME)
+        return obj
 
 
 class ConversationCache:
