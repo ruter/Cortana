@@ -1,5 +1,9 @@
 from supabase import create_client, Client
-from .config import config
+
+try:
+    from .config import config
+except ImportError:
+    from config import config
 
 class Database:
     _instance = None
