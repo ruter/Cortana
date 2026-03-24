@@ -12,9 +12,9 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 # Import the tools module
 import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
-from tools import (
+from src.tools import (
     execute_bash,
     read_file,
     write_file,
