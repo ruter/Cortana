@@ -15,6 +15,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.database import db
 from src.config import config
 
+import pytest
+
+@pytest.mark.asyncio
 async def test_reminder_creation():
     """Test creating a reminder directly in the database."""
     print("=== Testing Reminder Creation ===")
@@ -59,6 +62,7 @@ async def test_reminder_creation():
         print(f"❌ Error creating reminder: {e}")
         return None
 
+@pytest.mark.asyncio
 async def test_reminder_query():
     """Test querying reminders that are due."""
     print("\n=== Testing Reminder Query ===")
@@ -83,6 +87,7 @@ async def test_reminder_query():
         print(f"❌ Error querying reminders: {e}")
         return []
 
+@pytest.mark.asyncio
 async def test_reminder_marking_sent(reminder_id):
     """Test marking a reminder as sent."""
     print(f"\n=== Testing Marking Reminder {reminder_id} as Sent ===")
@@ -101,6 +106,7 @@ async def test_reminder_marking_sent(reminder_id):
     except Exception as e:
         print(f"❌ Error marking reminder as sent: {e}")
 
+@pytest.mark.asyncio
 async def test_list_user_reminders(user_id):
     """Test listing all reminders for a user."""
     print(f"\n=== Testing List Reminders for User {user_id} ===")
