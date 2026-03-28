@@ -135,6 +135,10 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    _last_summary: Optional[tuple] = field(default=None, repr=False)
+    version: int = 0
+    is_compacting: bool = field(default=False, repr=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +172,10 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            if self._last_summary != (self.compact_summary, model):
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = (self.compact_summary, model)
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,6 +194,8 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
+            "version": self.version,
         }
     
     @classmethod
@@ -199,6 +208,8 @@ class ConversationState:
             last_activity=datetime.fromisoformat(data.get("last_activity", datetime.now().isoformat())),
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
+            summary_tokens=data.get("summary_tokens", 0),
+            version=data.get("version", 0),
         )
 
 
@@ -239,7 +250,8 @@ class ConversationCache:
             persistence_dir: Directory for file-based persistence (optional).
         """
         self._cache: Dict[str, ConversationState] = {}
-        self._lock = asyncio.Lock()
+        self._dict_lock = asyncio.Lock()
+        self._user_locks: Dict[str, asyncio.Lock] = {}
         self.ttl_seconds = ttl_seconds
         self.token_threshold = token_threshold
         self.keep_recent = keep_recent
@@ -250,6 +262,12 @@ class ConversationCache:
             self.persistence_dir.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"ConversationCache initialized: TTL={ttl_seconds}s, threshold={token_threshold}")
+
+    def _get_user_lock(self, user_id: str) -> asyncio.Lock:
+        """Get or create a per-user lock."""
+        if user_id not in self._user_locks:
+            self._user_locks[user_id] = asyncio.Lock()
+        return self._user_locks[user_id]
     
     def _get_persistence_path(self, user_id: str) -> Optional[Path]:
         """Get the persistence file path for a user."""
@@ -291,21 +309,44 @@ class ConversationCache:
             logger.warning(f"Failed to load conversation from file: {e}")
             return None
     
-    def _sync_save(self, path: Path, data: Dict[str, Any]) -> None:
+    def _sync_save(self, path: Path, data: Dict[str, Any], version: int) -> None:
         """Synchronous save for executor."""
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # Simple version check to skip stale writes if file exists
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                    if existing.get("version", 0) >= version:
+                        return
+            except Exception:
+                pass
 
-    async def _save_to_file(self, state: ConversationState) -> None:
+        # Write to a unique temp file and rename atomically
+        import tempfile
+        import shutil
+
+        # Create temp file in the same directory to ensure atomic rename works
+        fd, tmp_path_str = tempfile.mkstemp(dir=path.parent, suffix=".jsonl.tmp", text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            shutil.move(tmp_path_str, str(path))
+        except Exception:
+            # Clean up temp file on failure
+            if os.path.exists(tmp_path_str):
+                os.unlink(tmp_path_str)
+            raise
+
+    async def _save_to_file(self, user_id: str, data: Dict[str, Any], version: int) -> None:
         """Save conversation state to file."""
-        path = self._get_persistence_path(state.user_id)
+        path = self._get_persistence_path(user_id)
         if not path:
             return
         
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._sync_save, path, state.to_json())
-            logger.debug(f"Saved conversation state to file for user {state.user_id}")
+            await loop.run_in_executor(None, self._sync_save, path, data, version)
+            logger.debug(f"Saved conversation state to file for user {user_id}")
         except Exception as e:
             logger.warning(f"Failed to save conversation to file: {e}")
     
@@ -327,29 +368,34 @@ class ConversationCache:
     
     async def get_or_create(self, user_id: str) -> ConversationState:
         """Get existing conversation or create new one."""
-        async with self._lock:
-            # Check in-memory cache first
-            if user_id in self._cache:
-                state = self._cache[user_id]
-                if state.is_expired():
-                    # Expired, remove and create new
-                    del self._cache[user_id]
-                    await self._delete_file(user_id)
-                else:
-                    return state
+        async with self._dict_lock:
+            user_lock = self._get_user_lock(user_id)
+
+        async with user_lock:
+            # Double check inside the user lock
+            async with self._dict_lock:
+                if user_id in self._cache:
+                    state = self._cache[user_id]
+                    if state.is_expired():
+                        # Expired, remove and create new
+                        del self._cache[user_id]
+                        # Don't delete file here, we will overwrite it
+                    else:
+                        return state
             
             # Try to load from file
             state = await self._load_from_file(user_id)
-            if state:
-                self._cache[user_id] = state
-                return state
             
-            # Create new conversation
-            state = ConversationState(
-                user_id=user_id,
-                ttl_seconds=self.ttl_seconds,
-            )
-            self._cache[user_id] = state
+            if not state:
+                # Create new conversation
+                state = ConversationState(
+                    user_id=user_id,
+                    ttl_seconds=self.ttl_seconds,
+                )
+
+            async with self._dict_lock:
+                self._cache[user_id] = state
+
             return state
     
     async def add_message(
@@ -370,7 +416,10 @@ class ConversationCache:
         """
         state = await self.get_or_create(user_id)
         
-        async with self._lock:
+        async with self._dict_lock:
+            user_lock = self._get_user_lock(user_id)
+
+        async with user_lock:
             # Calculate token count
             model = model or config.LLM_MODEL_NAME
             tokens = token_count(model, text=content)
@@ -384,10 +433,14 @@ class ConversationCache:
             
             state.messages.append(msg)
             state.total_tokens += tokens
+            state.version += 1
             state.touch()
             
-            # Save to file
-            await self._save_to_file(state)
+            data = state.to_json()
+            version = state.version
+
+            # Save to file while holding the user lock
+            await self._save_to_file(user_id, data, version)
         
         logger.debug(f"Added {role} message for user {user_id}: {tokens} tokens, total: {state.total_tokens}")
     
@@ -418,12 +471,15 @@ class ConversationCache:
         context_limit = get_model_context_limit(model)
         threshold = int(context_limit * self.token_threshold)
         
+        async with self._dict_lock:
+            user_lock = self._get_user_lock(user_id)
+
         # Recalculate tokens
-        async with self._lock:
+        async with user_lock:
             current_tokens = state.calculate_tokens(model)
         
         # Check if compaction is needed
-        if current_tokens > threshold:
+        if current_tokens > threshold and not state.is_compacting:
             logger.info(f"Token threshold exceeded ({current_tokens}/{threshold}), compacting...")
             await self._compact(user_id, model)
         
@@ -439,14 +495,19 @@ class ConversationCache:
         3. Store summary as compact_summary
         4. Reset TTL
         """
-        async with self._lock:
+        async with self._dict_lock:
+            user_lock = self._get_user_lock(user_id)
+
+        async with user_lock:
             state = self._cache.get(user_id)
             if not state or len(state.messages) <= self.keep_recent * 2:
                 return
+
+            state.is_compacting = True
             
             # Prepare messages for summarization
             messages_to_summarize = state.messages[:-self.keep_recent * 2]
-            recent_messages = state.messages[-self.keep_recent * 2:]
+            num_summarized = len(messages_to_summarize)
             
             # Build conversation text for summary
             conversation_text = ""
@@ -457,26 +518,36 @@ class ConversationCache:
                 role_label = "User" if msg.role == "user" else "Assistant"
                 conversation_text += f"{role_label}: {msg.content}\n\n"
         
-        # Generate summary (outside lock to avoid blocking)
-        summary = await self._generate_summary(conversation_text, model)
-        
-        async with self._lock:
-            state = self._cache.get(user_id)
-            if not state:
-                return
+        try:
+            # Generate summary (outside lock to avoid blocking)
+            summary = await self._generate_summary(conversation_text, model)
             
-            # Update state
-            state.compact_summary = summary
-            state.messages = recent_messages
-            state.touch()
+            async with user_lock:
+                state = self._cache.get(user_id)
+                if not state:
+                    return
+
+                # Update state safely using num_summarized to avoid losing concurrent additions
+                state.compact_summary = summary
+                state.messages = state.messages[num_summarized:]
+                state.touch()
+                state.version += 1
+
+                # Recalculate tokens
+                state.calculate_tokens(model)
+
+                data = state.to_json()
+                version = state.version
+
+                # Save to file while holding the user lock
+                await self._save_to_file(user_id, data, version)
             
-            # Recalculate tokens
-            state.calculate_tokens(model)
-            
-            # Save to file
-            await self._save_to_file(state)
-        
-        logger.info(f"Compacted conversation for user {user_id}: {len(messages_to_summarize)} messages summarized")
+            logger.info(f"Compacted conversation for user {user_id}: {num_summarized} messages summarized")
+        finally:
+            async with user_lock:
+                state = self._cache.get(user_id)
+                if state:
+                    state.is_compacting = False
     
     async def _generate_summary(self, conversation_text: str, model: str) -> str:
         """
@@ -527,11 +598,29 @@ Conversation history:
         Args:
             user_id: User identifier.
         """
-        async with self._lock:
-            if user_id in self._cache:
-                del self._cache[user_id]
-            await self._delete_file(user_id)
+        async with self._dict_lock:
+            user_lock = self._user_locks.get(user_id)
         
+        if user_lock:
+            async with user_lock:
+                # Remove from dict lock INSIDE user lock to prevent a concurrent
+                # add_message from recreating the cache before file deletion
+                async with self._dict_lock:
+                    if user_id in self._cache:
+                        del self._cache[user_id]
+
+                await self._delete_file(user_id)
+
+                # Cleanup the user lock safely
+                async with self._dict_lock:
+                    if self._user_locks.get(user_id) is user_lock:
+                        del self._user_locks[user_id]
+        else:
+            async with self._dict_lock:
+                if user_id in self._cache:
+                    del self._cache[user_id]
+            await self._delete_file(user_id)
+
         logger.info(f"Cleared conversation cache for user {user_id}")
     
     async def cleanup_expired(self) -> int:
@@ -541,14 +630,38 @@ Conversation history:
         Returns:
             Number of conversations removed.
         """
-        async with self._lock:
+        async with self._dict_lock:
             expired = [
                 user_id for user_id, state in self._cache.items()
                 if state.is_expired()
             ]
             
-            for user_id in expired:
-                del self._cache[user_id]
+            # Get locks to process file deletion outside dict lock
+            locks_to_clean = [(uid, self._user_locks.get(uid)) for uid in expired]
+
+        for user_id, user_lock in locks_to_clean:
+            if user_lock:
+                async with user_lock:
+                    # Double-check expiration and remove from dict inside user lock
+                    async with self._dict_lock:
+                        state = self._cache.get(user_id)
+                        if state and state.is_expired():
+                            del self._cache[user_id]
+                        else:
+                            continue # state was refreshed concurrently
+
+                    await self._delete_file(user_id)
+                    # Cleanup the user lock safely
+                    async with self._dict_lock:
+                        if self._user_locks.get(user_id) is user_lock:
+                            del self._user_locks[user_id]
+            else:
+                async with self._dict_lock:
+                    state = self._cache.get(user_id)
+                    if state and state.is_expired():
+                        del self._cache[user_id]
+                    else:
+                        continue
                 await self._delete_file(user_id)
         
         if expired:
