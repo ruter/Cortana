@@ -221,7 +221,7 @@ class TestConversationCache:
         
         with patch("src.conversation_cache.token_count", return_value=10):
             await cache1.add_message("user123", "user", "Persisted message")
-        
+
         # Create new cache instance (simulating restart)
         cache2 = ConversationCache(persistence_dir=temp_dir)
         
