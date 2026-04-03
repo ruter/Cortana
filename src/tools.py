@@ -36,18 +36,26 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+_known_users = set()
+
+def _sync_ensure_user_exists(user_id: int) -> None:
     try:
-        # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
-            # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
     except Exception as e:
-        # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
+
+    _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
