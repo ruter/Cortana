@@ -19,7 +19,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import config
 from .rotator_client import token_count, rotating_completion, normalize_model_name
@@ -135,6 +135,8 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    _last_summary: Optional[Tuple[str, str]] = field(default=None, init=False, repr=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +170,11 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            current_summary = (self.compact_summary, model)
+            if self._last_summary != current_summary or self.summary_tokens == 0:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = current_summary
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,12 +193,13 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
     
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "ConversationState":
         """Create from JSON data."""
-        return cls(
+        state = cls(
             user_id=data["user_id"],
             messages=[CachedMessage.from_json(m) for m in data.get("messages", [])],
             compact_summary=data.get("compact_summary"),
@@ -200,6 +207,8 @@ class ConversationState:
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
         )
+        state.summary_tokens = data.get("summary_tokens", 0)
+        return state
 
 
 class ConversationCache:
