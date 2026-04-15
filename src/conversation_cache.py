@@ -136,6 +136,13 @@ class ConversationState:
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
     
+    # Memoization field to cache the token count for the summary.
+    # Token counting can be CPU intensive; since the compact_summary
+    # rarely changes between message additions, memoization prevents
+    # unnecessary repetitive calculations.
+    summary_tokens: int = 0
+    _last_summary: Optional[tuple[str, str]] = field(default=None, repr=False)
+
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
         return datetime.now() > self.last_activity + timedelta(seconds=self.ttl_seconds)
@@ -168,7 +175,15 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            # ⚡ Bolt Optimization: Memoize the token counting for the compact summary.
+            # This avoids redundant synchronous tokenization during high-frequency additions.
+            # Expected impact: Faster calculate_tokens operations for long-running threads.
+            if self._last_summary == (self.compact_summary, model):
+                total += self.summary_tokens
+            else:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = (self.compact_summary, model)
+                total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
