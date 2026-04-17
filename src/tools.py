@@ -36,14 +36,24 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+# In-memory cache for users verified to exist in the database
+_known_users = set()
+
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    # Fast path: check in-memory cache
+    if user_id in _known_users:
+        return
+
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+
+        # Cache successful verification
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
