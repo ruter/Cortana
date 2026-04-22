@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
+import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
 from exa_py import Exa
@@ -34,20 +35,29 @@ class Reminder(BaseModel):
     related_event_id: Optional[int] = None
     created_at: datetime
 
+
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+_known_users = set()
+
+def _db_ensure_user_exists_sync(user_id: int) -> None:
+    """Synchronous helper to ensure user exists in the database."""
     try:
-        # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
-            # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
     except Exception as e:
-        # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table, using an in-memory cache to avoid redundant db calls."""
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _db_ensure_user_exists_sync, user_id)
+    _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
@@ -410,7 +420,6 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
 # --- Coding Tools ---
 # Ported from badlogic/pi-mono mom package for Pi Coding Agent capabilities
 
-import asyncio
 import os
 from pathlib import Path
 
