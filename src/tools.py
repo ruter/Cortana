@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
@@ -36,18 +37,39 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+# Cache of known users to skip redundant database checks
+# Expected performance impact: Eliminates one synchronous DB call per repeated bot operation
+_known_users = set()
+
+def _sync_ensure_user_exists(user_id: int) -> None:
+    """Synchronous helper for ensure_user_exists to offload blocking DB calls."""
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+        else:
+            # If duplicate, user definitely exists
+            _known_users.add(user_id)
+
+async def ensure_user_exists(user_id: int) -> None:
+    """
+    Ensure user exists in user_settings table.
+    Performance Optimization:
+    - Uses in-memory _known_users set to skip redundant synchronous database lookups
+    - Offloads blocking Supabase execute() calls to a thread pool via run_in_executor
+    """
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
 
 # --- Transaction Tools ---
 
