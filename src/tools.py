@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
@@ -36,17 +37,30 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+_known_users: set[int] = set()
+
 async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
-    try:
+    """Ensure user exists in user_settings table. Uses an in-memory cache to avoid repeated DB calls."""
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+
+    def _db_check_and_insert():
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+
+    try:
+        await loop.run_in_executor(None, _db_check_and_insert)
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        # If error is about duplicate, they exist, so we can cache
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
 
 # --- Transaction Tools ---
