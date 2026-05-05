@@ -135,6 +135,8 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: int = 0
+    _last_summary: Optional[tuple[str, str]] = field(default=None, repr=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -168,7 +170,11 @@ class ConversationState:
         total = 0
         
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            current_summary_state = (self.compact_summary, model)
+            if self._last_summary != current_summary_state:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = current_summary_state
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
@@ -187,6 +193,7 @@ class ConversationState:
             "last_activity": self.last_activity.isoformat(),
             "ttl_seconds": self.ttl_seconds,
             "total_tokens": self.total_tokens,
+            "summary_tokens": self.summary_tokens,
         }
     
     @classmethod
@@ -199,6 +206,7 @@ class ConversationState:
             last_activity=datetime.fromisoformat(data.get("last_activity", datetime.now().isoformat())),
             ttl_seconds=data.get("ttl_seconds", DEFAULT_TTL_SECONDS),
             total_tokens=data.get("total_tokens", 0),
+            summary_tokens=data.get("summary_tokens", 0),
         )
 
 
