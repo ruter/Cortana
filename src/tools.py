@@ -36,18 +36,35 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+# In-memory cache to skip redundant synchronous database lookups
+_known_users = set()
+
+def _check_and_create_user(user_id: int) -> bool:
+    """Synchronous helper to check and create user in Supabase."""
+    response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+    if not response.data:
+        # User doesn't exist, create it
+        db.table("user_settings").insert({"user_id": user_id}).execute()
+    return True
+
 async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+    """Ensure user exists in user_settings table, using an in-memory cache to skip redundant DB calls."""
+    if user_id in _known_users:
+        return
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+        # Offload synchronous Supabase execution to executor
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _check_and_create_user, user_id)
+        # Only update cache upon successful execution
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+        else:
+            # Expected error confirming state, update cache
+            _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
