@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
@@ -36,18 +37,37 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+_known_users = set()
+
+def _check_user_exists_sync(user_id: int) -> bool:
+    response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+    return bool(response.data)
+
+def _create_user_sync(user_id: int) -> None:
+    db.table("user_settings").insert({"user_id": user_id}).execute()
+
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    if user_id in _known_users:
+        return
+
     try:
+        loop = asyncio.get_running_loop()
         # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
+        user_exists = await loop.run_in_executor(None, _check_user_exists_sync, user_id)
+
+        if not user_exists:
             # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+            await loop.run_in_executor(None, _create_user_sync, user_id)
+
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+        else:
+            # If it's a duplicate, it means the user was created concurrently
+            _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
@@ -410,7 +430,6 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
 # --- Coding Tools ---
 # Ported from badlogic/pi-mono mom package for Pi Coding Agent capabilities
 
-import asyncio
 import os
 from pathlib import Path
 
