@@ -34,19 +34,42 @@ class Reminder(BaseModel):
     related_event_id: Optional[int] = None
     created_at: datetime
 
+import asyncio
+
 # --- Helper Functions ---
+
+_known_users = set()
 
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    # ⚡ Bolt Optimization: Skip DB check if user is already known in memory
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+        # Check if user exists (offloaded to thread pool to avoid blocking async event loop)
+        def _check_user():
+            return db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+
+        response = await loop.run_in_executor(None, _check_user)
+
         if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+            # User doesn't exist, create it (offloaded to thread pool)
+            def _create_user():
+                return db.table("user_settings").insert({"user_id": user_id}).execute()
+
+            await loop.run_in_executor(None, _create_user)
+
+        # Cache the user as known only upon successful DB interaction
+        _known_users.add(user_id)
+
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        # If error is about duplicate, it means the user was created concurrently.
+        # We can safely add them to the cache.
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
 
 # --- Transaction Tools ---
