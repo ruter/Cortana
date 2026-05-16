@@ -3,6 +3,7 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 import aiohttp
 from bs4 import BeautifulSoup
+import asyncio
 from exa_py import Exa
 from .config import config
 from .database import db
@@ -36,18 +37,35 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+# Cache known users in memory to prevent repetitive synchronous
+# database queries during frequently called transaction tools.
+_known_users = set()
+
+def _ensure_user_db_call(user_id: int) -> None:
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    # Fast path: check in-memory cache to avoid database hit
+    if user_id in _known_users:
+        return
+
+    # Offload the synchronous Supabase query to a thread pool
+    # to prevent blocking the async event loop during I/O.
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _ensure_user_db_call, user_id)
 
 # --- Transaction Tools ---
 
