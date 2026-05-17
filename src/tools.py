@@ -4,10 +4,13 @@ from pydantic import BaseModel, Field
 import aiohttp
 from bs4 import BeautifulSoup
 from exa_py import Exa
+import asyncio
 from .config import config
 from .database import db
 from .memory import memory_client
 from .cortana_context import CortanaContext
+
+_known_users = set()
 
 # --- Data Models ---
 
@@ -36,18 +39,25 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+def _check_or_create_user(user_id: int) -> None:
+    """Synchronous helper to check/create user."""
     try:
-        # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
-            # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
+
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    if user_id in _known_users:
+        return
+    await asyncio.get_running_loop().run_in_executor(None, _check_or_create_user, user_id)
 
 # --- Transaction Tools ---
 
