@@ -8,6 +8,7 @@ from .config import config
 from .database import db
 from .memory import memory_client
 from .cortana_context import CortanaContext
+import asyncio
 
 # --- Data Models ---
 
@@ -36,17 +37,31 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+_known_users = set()
+
+def _sync_ensure_user_exists(user_id: int) -> None:
+    """Synchronous execution of database commands to ensure user exists."""
+    # Check if user exists
+    response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+    if not response.data:
+        # User doesn't exist, create it
+        db.table("user_settings").insert({"user_id": user_id}).execute()
+
 async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+    """Ensure user exists in user_settings table (cached)."""
+    if user_id in _known_users:
+        return
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+        # Offload synchronous execution to thread pool
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        # If error is about duplicate, they now exist.
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
 
 # --- Transaction Tools ---
@@ -410,7 +425,6 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
 # --- Coding Tools ---
 # Ported from badlogic/pi-mono mom package for Pi Coding Agent capabilities
 
-import asyncio
 import os
 from pathlib import Path
 
