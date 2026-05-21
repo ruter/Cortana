@@ -1,3 +1,6 @@
 ## 2025-02-19 - Dependency Management in Optimization
 **Learning:** Even if a library is in `requirements.txt`, using `run_in_executor` with the standard library is preferred by some reviewers for file I/O to minimize dependencies and maintain simplicity.
 **Action:** Prefer standard library solutions (like `run_in_executor`) for async I/O over external libraries unless the external library offers significant additional value.
+## 2025-02-19 - Safe Deserialization of Invalidation State
+**Learning:** When caching derived metrics (like token counts) internally within data models and serializing them to JSON, internal invalidation fields (like `_last_summary`) that depend on runtime context (like `model` name) cannot be reliably persisted. Attempting to restore them from JSON without context breaks cache invalidation if the context changes between loads.
+**Action:** When updating persistent cache models to include derived data, safely default the cached value from JSON, but leave the internal invalidation state (e.g., `_last_summary`) unset (`None`). This forces a safe, lazy recalculation on the first use after deserialization, guaranteeing the invalidation logic remains robust across restarts.
