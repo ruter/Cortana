@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
@@ -36,18 +37,36 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+# Cache of known users to skip redundant DB lookups during bot operations
+_known_users = set()
+
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    # Performance Optimization: Early return if user is already verified
+    if user_id in _known_users:
+        return
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+        # Performance Optimization: Offload blocking synchronous Supabase .execute()
+        # calls to a separate thread to prevent blocking the async event loop.
+        loop = asyncio.get_running_loop()
+        def db_call():
+            # Check if user exists
+            response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+            if not response.data:
+                # User doesn't exist, create it
+                db.table("user_settings").insert({"user_id": user_id}).execute()
+
+        await loop.run_in_executor(None, db_call)
+        # Add to cache only upon successful DB execution
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+        else:
+            # If the error is duplicate, it implies the user exists, so we can cache it
+            _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
