@@ -135,6 +135,8 @@ class ConversationState:
     last_activity: datetime = field(default_factory=datetime.now)
     ttl_seconds: int = DEFAULT_TTL_SECONDS
     total_tokens: int = 0
+    summary_tokens: Optional[int] = None
+    _last_summary: Optional[tuple] = field(default=None, repr=False)
     
     def is_expired(self) -> bool:
         """Check if the conversation has expired."""
@@ -167,8 +169,15 @@ class ConversationState:
         """Calculate and cache total token count."""
         total = 0
         
+        # Performance optimization:
+        # Cache the token count for the summary, which can be computationally expensive to recalculate.
+        # Invalidate the cache if the summary text or the model used for counting changes.
         if self.compact_summary:
-            total += token_count(model, text=self.compact_summary)
+            current_summary_tuple = (self.compact_summary, model)
+            if self.summary_tokens is None or self._last_summary != current_summary_tuple:
+                self.summary_tokens = token_count(model, text=self.compact_summary)
+                self._last_summary = current_summary_tuple
+            total += self.summary_tokens
         
         for msg in self.messages:
             if msg.token_count == 0:
