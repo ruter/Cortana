@@ -1,3 +1,6 @@
 ## 2025-02-19 - Dependency Management in Optimization
 **Learning:** Even if a library is in `requirements.txt`, using `run_in_executor` with the standard library is preferred by some reviewers for file I/O to minimize dependencies and maintain simplicity.
 **Action:** Prefer standard library solutions (like `run_in_executor`) for async I/O over external libraries unless the external library offers significant additional value.
+## 2025-02-19 - Cache Serialization Consistency
+**Learning:** When adding cached derived metrics (like token counts) to a serializable model (like `ConversationState`), do not persist the cached values to JSON if their corresponding invalidation keys (like `_last_summary`) cannot or are not also serialized. Doing so leaves the deserialized object in an inconsistent state where the cache invalidation key defaults to `None` but the metric holds a stale value, leading to unconditional and redundant recomputation anyway.
+**Action:** Let runtime caches default to their empty/uninitialized states upon JSON deserialization. This correctly triggers a fresh lazy recomputation during the object's first use in the new session, avoiding schema bloat and maintaining cache coherence.
