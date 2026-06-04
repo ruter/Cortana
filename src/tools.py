@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 import aiohttp
 from bs4 import BeautifulSoup
 from exa_py import Exa
+import asyncio
 from .config import config
 from .database import db
 from .memory import memory_client
@@ -36,18 +37,31 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+_known_users = set()
+
+def _ensure_user_exists_sync(user_id: int) -> None:
+    # Check if user exists
+    response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+    if not response.data:
+        # User doesn't exist, create it
+        db.table("user_settings").insert({"user_id": user_id}).execute()
+
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    if user_id in _known_users:
+        return
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _ensure_user_exists_sync, user_id)
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+        else:
+            # If it's a duplicate error, it means the user exists, so cache it
+            _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
