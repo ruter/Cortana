@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
@@ -36,8 +37,9 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+_known_users = set()
+
+def _sync_ensure_user_exists(user_id: int) -> None:
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
@@ -48,6 +50,19 @@ async def ensure_user_exists(user_id: int) -> None:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+            raise e
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    if user_id in _known_users:
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
+        _known_users.add(user_id)
+    except Exception as e:
+        print(f"Error ensuring user exists in background: {e}")
 
 # --- Transaction Tools ---
 
