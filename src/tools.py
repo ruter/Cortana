@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
@@ -36,17 +37,36 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+# Global cache to avoid redundant synchronous DB lookups during repetitive bot operations
+_known_users: set[int] = set()
+
+def _check_and_create_user(user_id: int) -> None:
+    """Synchronous helper for database operations."""
+    # Check if user exists
+    response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+    if not response.data:
+        # User doesn't exist, create it
+        db.table("user_settings").insert({"user_id": user_id}).execute()
+
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    # Fast path: user is already known in this session
+    if user_id in _known_users:
+        return
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+        # Offload synchronous database call to avoid blocking the event loop
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _check_and_create_user, user_id)
+        # Update cache on success
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        # If error is about duplicate, it means user was created by another process,
+        # so they exist and we can cache them
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
+            # Log unexpected errors but don't cache
             print(f"Error ensuring user exists: {e}")
 
 # --- Transaction Tools ---
