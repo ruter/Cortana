@@ -34,20 +34,41 @@ class Reminder(BaseModel):
     related_event_id: Optional[int] = None
     created_at: datetime
 
+import asyncio
+
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+_known_users = set()
+
+def _sync_ensure_user(user_id: int) -> bool:
+    """Synchronous database operations for ensure_user_exists."""
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        return True
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
-            print(f"Error ensuring user exists: {e}")
+        # If error is duplicate, it's expected and means the user exists
+        if "duplicate" in str(e).lower():
+            return True
+        print(f"Error ensuring user exists: {e}")
+        return False
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    # Fast path: check in-memory cache
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+    # Offload synchronous database calls to executor to prevent blocking the event loop
+    success = await loop.run_in_executor(None, _sync_ensure_user, user_id)
+
+    # Update cache only on success to prevent cache poisoning
+    if success:
+        _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
