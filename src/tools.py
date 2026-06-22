@@ -8,6 +8,7 @@ from .config import config
 from .database import db
 from .memory import memory_client
 from .cortana_context import CortanaContext
+import asyncio
 
 # --- Data Models ---
 
@@ -36,18 +37,36 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+_known_users = set()
+
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+
+    def _check_user():
+        return db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+
+    def _insert_user():
+        db.table("user_settings").insert({"user_id": user_id}).execute()
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+        # Check if user exists without blocking the event loop
+        response = await loop.run_in_executor(None, _check_user)
         if not response.data:
             # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+            await loop.run_in_executor(None, _insert_user)
+        # Update cache to skip future checks
+        _known_users.add(user_id)
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+        else:
+            # If duplicate, another concurrent request created it, we can cache it
+            _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
