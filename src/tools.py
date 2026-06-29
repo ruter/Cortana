@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 from pydantic import BaseModel, Field
 import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
@@ -36,18 +37,33 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+_known_users: Set[int] = set()
+
+def _sync_ensure_user_exists(user_id: int) -> None:
+    """Synchronous helper to check/create user in DB."""
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        # Successfully confirmed or created
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        # If error is about duplicate, it means the user was created concurrently
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    if user_id in _known_users:
+        return
+
+    # Execute the synchronous DB call in a thread pool to avoid blocking the event loop
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
 
 # --- Transaction Tools ---
 
@@ -410,7 +426,6 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
 # --- Coding Tools ---
 # Ported from badlogic/pi-mono mom package for Pi Coding Agent capabilities
 
-import asyncio
 import os
 from pathlib import Path
 
