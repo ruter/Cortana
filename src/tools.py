@@ -36,18 +36,42 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+# Cache to avoid redundant database calls for user existence
+_known_users = set()
+
+def _sync_ensure_user_exists(user_id: int) -> bool:
+    """Synchronous helper to check/create user in DB."""
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        return True
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+            return False
+        # If it's a duplicate error, it means the user exists, so it's a success
+        return True
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    global _known_users
+
+    # ⚡ OPTIMIZATION: Check in-memory cache first to avoid redundant DB queries
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+    # ⚡ OPTIMIZATION: Offload synchronous Supabase calls to a thread pool
+    # to prevent blocking the asyncio event loop
+    success = await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
+
+    # Only add to cache if we successfully verified or created the user
+    if success:
+        _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
