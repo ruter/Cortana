@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 from pydantic import BaseModel, Field
 import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
@@ -36,17 +37,36 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+# Cache of user IDs that are known to exist in the database
+_known_users: Set[int] = set()
+
+def _sync_ensure_user_exists(user_id: int) -> None:
+    """Synchronous database operation to ensure a user exists."""
+    # Check if user exists
+    response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+    if not response.data:
+        # User doesn't exist, create it
+        db.table("user_settings").insert({"user_id": user_id}).execute()
+
+
 async def ensure_user_exists(user_id: int) -> None:
     """Ensure user exists in user_settings table."""
+    # Optimization: Return early if we already verified this user in the current session
+    if user_id in _known_users:
+        return
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+        # Optimization: Offload synchronous Supabase execute() to prevent blocking the event loop
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
+
+        # Add to known users cache on success
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        # If error is a duplicate constraint violation, it means the user was created concurrently
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
 
 # --- Transaction Tools ---
