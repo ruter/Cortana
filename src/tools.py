@@ -1,5 +1,6 @@
+import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 from pydantic import BaseModel, Field
 import aiohttp
 from bs4 import BeautifulSoup
@@ -36,18 +37,36 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+# Global cache for user existence checks
+_known_users: Set[int] = set()
+
+def _sync_ensure_user_exists(user_id: int) -> bool:
+    """Synchronous helper for ensure_user_exists. Returns True if user exists/created, False otherwise."""
     try:
         # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
             # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        return True
     except Exception as e:
         # If error is not about duplicate, log it
         if "duplicate" not in str(e).lower():
             print(f"Error ensuring user exists: {e}")
+            return False
+        # Duplicate means it exists, so consider it successful
+        return True
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table, utilizing an in-memory cache and non-blocking DB calls."""
+    if user_id in _known_users:
+        return
+
+    loop = asyncio.get_running_loop()
+    success = await loop.run_in_executor(None, _sync_ensure_user_exists, user_id)
+
+    if success:
+        _known_users.add(user_id)
 
 # --- Transaction Tools ---
 
