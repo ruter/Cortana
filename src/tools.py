@@ -8,6 +8,10 @@ from .config import config
 from .database import db
 from .memory import memory_client
 from .cortana_context import CortanaContext
+import asyncio
+
+# --- Cache ---
+_known_users = set()
 
 # --- Data Models ---
 
@@ -36,17 +40,32 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
+def _ensure_user_exists_sync(user_id: int) -> None:
+    """Synchronous helper to ensure user exists."""
+    response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
+    if not response.data:
+        db.table("user_settings").insert({"user_id": user_id}).execute()
+
 async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+    """Ensure user exists in user_settings table.
+
+    Optimization: Uses an in-memory cache to prevent redundant database lookups
+    and offloads the synchronous Supabase execution to the thread pool to avoid
+    blocking the asyncio event loop.
+    """
+    if user_id in _known_users:
+        return
+
     try:
-        # Check if user exists
-        response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
-        if not response.data:
-            # User doesn't exist, create it
-            db.table("user_settings").insert({"user_id": user_id}).execute()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _ensure_user_exists_sync, user_id)
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        # If error is about duplicate, it means the user was created concurrently
+        # or already exists, which is safe to cache.
+        if "duplicate" in str(e).lower():
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
 
 # --- Transaction Tools ---
