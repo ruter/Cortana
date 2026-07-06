@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 from pydantic import BaseModel, Field
 import aiohttp
 from bs4 import BeautifulSoup
 from exa_py import Exa
 from .config import config
 from .database import db
+import asyncio
 from .memory import memory_client
 from .cortana_context import CortanaContext
 
@@ -36,18 +37,33 @@ class Reminder(BaseModel):
 
 # --- Helper Functions ---
 
-async def ensure_user_exists(user_id: int) -> None:
-    """Ensure user exists in user_settings table."""
+# In-memory cache of known user IDs to avoid redundant DB checks
+_known_users: Set[int] = set()
+
+def _ensure_user_exists_sync(user_id: int) -> None:
+    """Synchronous database operation to ensure user exists."""
     try:
-        # Check if user exists
         response = db.table("user_settings").select("user_id").eq("user_id", user_id).execute()
         if not response.data:
-            # User doesn't exist, create it
             db.table("user_settings").insert({"user_id": user_id}).execute()
+        _known_users.add(user_id)
     except Exception as e:
-        # If error is not about duplicate, log it
-        if "duplicate" not in str(e).lower():
+        if "duplicate" in str(e).lower():
+            # If it's a duplicate, the user exists, so we can cache it
+            _known_users.add(user_id)
+        else:
             print(f"Error ensuring user exists: {e}")
+
+async def ensure_user_exists(user_id: int) -> None:
+    """Ensure user exists in user_settings table."""
+    # ⚡ Bolt: Fast path - skip DB check if we already know the user exists
+    if user_id in _known_users:
+        return
+
+    # ⚡ Bolt: Offload synchronous Supabase execute() to a thread pool
+    # to prevent blocking the main asyncio event loop
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _ensure_user_exists_sync, user_id)
 
 # --- Transaction Tools ---
 
@@ -410,7 +426,6 @@ async def cancel_reminder(ctx: CortanaContext, reminder_id: int) -> str:
 # --- Coding Tools ---
 # Ported from badlogic/pi-mono mom package for Pi Coding Agent capabilities
 
-import asyncio
 import os
 from pathlib import Path
 
